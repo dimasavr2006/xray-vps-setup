@@ -17,7 +17,7 @@ VLESS со своим доменом. А что еще нужно для сча�
 ## Установка
 
 ```bash
-bash <(wget -qO- https://raw.githubusercontent.com/artemscine/xray-vps-setup/refs/heads/main/vps-setup.sh)
+bash <(wget -qO- https://raw.githubusercontent.com/dimasavr2006/xray-vps-setup/refs/heads/main/vps-setup.sh)
 ```
 
 Режимы установки:
@@ -32,5 +32,5 @@ bash <(wget -qO- https://raw.githubusercontent.com/artemscine/xray-vps-setup/ref
 ## Удаление
 
 ```bash
-bash <(wget -qO- https://raw.githubusercontent.com/artemscine/xray-vps-setup/refs/heads/main/uninstall.sh)
+bash <(wget -qO- https://raw.githubusercontent.com/dimasavr2006/xray-vps-setup/refs/heads/main/uninstall.sh)
 ```
