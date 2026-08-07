@@ -1,0 +1,48 @@
+services:
+  caddy:
+    image: caddy:2.9
+    container_name: caddy
+    restart: always
+    network_mode: host
+    volumes:
+      - ./caddy/data:/data
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile
+      - ./caddy/templates:/srv
+
+  marzneshin:
+    image: dawsh/marzneshin:latest
+    container_name: marzneshin
+    restart: always
+    network_mode: host
+    env_file: ./marzneshin/.env
+    volumes:
+      - ./marzneshin_data:/var/lib/marzneshin
+    depends_on:
+      marznode:
+        condition: service_started
+
+  marznode:
+    image: dawsh/marznode:latest
+    container_name: marznode
+    restart: always
+    network_mode: host
+    environment:
+      - SERVICE_ADDRESS=127.0.0.1
+      - SERVICE_PORT=53042
+      - INSECURE=True
+      - XRAY_ENABLED=True
+      - XRAY_EXECUTABLE_PATH=/usr/local/bin/xray
+      - XRAY_ASSETS_PATH=/usr/local/lib/xray
+      - XRAY_CONFIG_PATH=/var/lib/marznode/xray_config.json
+      - XRAY_RESTART_ON_FAILURE=True
+      - XRAY_RESTART_ON_FAILURE_INTERVAL=5
+      - HYSTERIA_ENABLED=$HYSTERIA_ENABLED
+      - HYSTERIA_EXECUTABLE_PATH=/usr/local/bin/hysteria
+      - HYSTERIA_CONFIG_PATH=/var/lib/marznode/hysteria.yaml
+      - SING_BOX_ENABLED=False
+    volumes:
+      - ./marznode_data:/var/lib/marznode
+      - ./caddy/data/caddy/certificates/acme-v02.api.letsencrypt.org-directory/$VLESS_DOMAIN:/certs:ro
+    depends_on:
+      caddy:
+        condition: service_started
