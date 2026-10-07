@@ -12,7 +12,7 @@ if [ -d "$TEMPLATES_DIR" ]; then
 else
   USE_LOCAL=false
   export GIT_BRANCH="main"
-  export GIT_REPO="artemscine/xray-vps-setup"
+  export GIT_REPO="dimasavr2006/xray-vps-setup"
 fi
 
 # Check if script started as root
