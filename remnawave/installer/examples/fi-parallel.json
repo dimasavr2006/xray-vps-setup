@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "environment_id": "fi-test",
+  "role": "panel-node",
+  "network_mode": "fi-parallel",
+  "domains": {
+    "panel": "rw-panel.example.com",
+    "subscription": "rw-sub.example.com",
+    "node": "rw-node.example.com"
+  },
+  "public_addresses": ["192.0.2.10"],
+  "admin": {"username": "owner", "email": "owner@example.com"},
+  "node_country": "FI",
+  "existing_caddy": {
+    "config_file": "/opt/marznode/caddy/Caddyfile",
+    "container": "caddy",
+    "health_url": "https://fi.example.com"
+  },
+  "resources": {"purpose": "test", "image_gib": 3, "data_gib": 1, "restore_gib": 2, "reserve_gib": 1}
+}

@@ -1,0 +1,131 @@
+{
+  "schema_version": 1,
+  "environment_id": null,
+  "status": "runtime-verified-fi-parallel-test",
+  "resolved_at": "2026-10-08T16:25:08.239404+03:00",
+  "components": {
+    "panel": {
+      "image": "remnawave/backend@sha256:b16d724b90fd7c9fec2df04bd28938a671cafc62894105068e11550ee3449c56",
+      "source_tag": "3.4.5",
+      "platforms": [
+        {
+          "architecture": "arm64",
+          "os": "linux"
+        },
+        {
+          "architecture": "amd64",
+          "os": "linux"
+        }
+      ],
+      "runtime_verified": true
+    },
+    "node": {
+      "image": "remnawave/node@sha256:1f97485b4bc7e4944f1ae95cc57d176376813b0022e9567b705f384f1a2e909d",
+      "source_tag": "3.4.2",
+      "platforms": [
+        {
+          "architecture": "amd64",
+          "os": "linux"
+        },
+        {
+          "architecture": "arm64",
+          "os": "linux"
+        }
+      ],
+      "runtime_verified": true
+    },
+    "postgres": {
+      "image": "library/postgres@sha256:a02db8cac496f15b094798a38254f14d6e00741f709360e5e00bb6668ea31636",
+      "source_tag": "18.4",
+      "platforms": [
+        {
+          "architecture": "amd64",
+          "os": "linux"
+        },
+        {
+          "architecture": "arm",
+          "os": "linux",
+          "variant": "v5"
+        },
+        {
+          "architecture": "arm",
+          "os": "linux",
+          "variant": "v7"
+        },
+        {
+          "architecture": "arm64",
+          "os": "linux",
+          "variant": "v8"
+        },
+        {
+          "architecture": "386",
+          "os": "linux"
+        },
+        {
+          "architecture": "ppc64le",
+          "os": "linux"
+        },
+        {
+          "architecture": "riscv64",
+          "os": "linux"
+        },
+        {
+          "architecture": "s390x",
+          "os": "linux"
+        }
+      ],
+      "runtime_verified": true
+    },
+    "valkey": {
+      "image": "valkey/valkey@sha256:48332870af354a799964c0012ae1194a0bf2bf894eb508f945810596dc2d8d11",
+      "source_tag": "9-alpine",
+      "platforms": [
+        {
+          "architecture": "amd64",
+          "os": "linux"
+        },
+        {
+          "architecture": "arm64",
+          "os": "linux"
+        },
+        {
+          "architecture": "arm",
+          "os": "linux",
+          "variant": "v7"
+        },
+        {
+          "architecture": "ppc64le",
+          "os": "linux"
+        }
+      ],
+      "runtime_verified": true
+    },
+    "caddy_auth": {
+      "image": "remnawave/caddy-with-auth@sha256:2098e1331c3499781791582076491b38545e27140c5a28b5c476a08b9b5c5f6f",
+      "source_tag": "latest",
+      "platforms": [
+        {
+          "architecture": "amd64",
+          "os": "linux"
+        }
+      ],
+      "runtime_verified": true
+    },
+    "subscription": {
+      "image": "remnawave/subscription-page@sha256:04e8d479afb3598024e4018e9e15cd7fe879938250090a690ba39f1ee91b79ac",
+      "source_tag": "latest",
+      "platforms": [
+        {
+          "architecture": "amd64",
+          "os": "linux"
+        },
+        {
+          "architecture": "arm64",
+          "os": "linux"
+        }
+      ],
+      "runtime_verified": true
+    }
+  },
+  "verified_scope": "Debian 13 amd64; FI compact parallel panel-node; 2026-10-09"
+}

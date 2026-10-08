@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "environment_id": "panel-test",
+  "role": "panel",
+  "network_mode": "clean",
+  "domains": {
+    "panel": "panel.example.com",
+    "subscription": "sub.example.com"
+  },
+  "public_addresses": ["192.0.2.10"],
+  "admin": {"username": "owner", "email": "owner@example.com"}
+}

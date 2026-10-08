@@ -1,0 +1,191 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-09",
+  "host": "FI",
+  "os": "Debian 13 amd64",
+  "environment_id": "fi-test",
+  "network_mode": "fi-parallel",
+  "resources_profile": "compact-test",
+  "domains": {
+    "node": "fl.wf.md",
+    "panel": "fl.wf.md",
+    "subscription": "fl.wf.md"
+  },
+  "ports": {
+    "panel_https": 9443,
+    "tcp_reality": 24443,
+    "xhttp": 28443,
+    "subscription_https": 9444
+  },
+  "result": "deployed-and-tested",
+  "checks": {
+    "unauthenticated_admin_protection": "pass",
+    "subscription_download_http": 200,
+    "installation": "pass",
+    "repeat_apply_preserves_secrets_and_api_uuids": true,
+    "subscription_checks_before_temporary_user_cleanup": true,
+    "trusted_https": "pass",
+    "administrative_login_form": "pass",
+    "old_https_status": 200,
+    "old_containers_not_restarted": true,
+    "old_xray_config_unchanged": true,
+    "certificate_preserved_after_caddy_recreate": true,
+    "acme_staging_certificate_reissued_with_different_serial": true,
+    "maintenance_cli_promoted_without_container_restart": true,
+    "tcp_and_xhttp": [
+      {
+        "transport": "tcp",
+        "exit_ip": "144.31.212.24",
+        "https_status": "204",
+        "passed": true
+      },
+      {
+        "transport": "xhttp",
+        "exit_ip": "144.31.212.24",
+        "https_status": "204",
+        "passed": true
+      }
+    ],
+    "subscription_browser_http": 200,
+    "temporary_test_user_deleted": true,
+    "backup_dump_and_archive": "pass",
+    "external_ipv4_ports": [
+      {
+        "port": 9443,
+        "open": true,
+        "expected_open": true
+      },
+      {
+        "port": 9444,
+        "open": true,
+        "expected_open": true
+      },
+      {
+        "port": 24443,
+        "open": true,
+        "expected_open": true
+      },
+      {
+        "port": 28443,
+        "open": true,
+        "expected_open": true
+      },
+      {
+        "port": 2222,
+        "open": false,
+        "expected_open": false
+      },
+      {
+        "port": 12019,
+        "open": false,
+        "expected_open": false
+      },
+      {
+        "port": 13000,
+        "open": false,
+        "expected_open": false
+      },
+      {
+        "port": 13001,
+        "open": false,
+        "expected_open": false
+      },
+      {
+        "port": 13010,
+        "open": false,
+        "expected_open": false
+      },
+      {
+        "port": 14123,
+        "open": false,
+        "expected_open": false
+      },
+      {
+        "port": 18080,
+        "open": false,
+        "expected_open": false
+      },
+      {
+        "port": 5432,
+        "open": false,
+        "expected_open": false
+      },
+      {
+        "port": 6379,
+        "open": false,
+        "expected_open": false
+      }
+    ]
+  },
+  "resources": {
+    "disk_free_bytes": 5132484608,
+    "hard_limits_total_mib": 1152,
+    "available_ram_mib": 691
+  },
+  "containers": [
+    {
+      "name": "/pdm-rw-fi-test-rw_caddy-1",
+      "state": "running",
+      "health": null,
+      "oom": false,
+      "restarts": 0,
+      "memory_limit_mib": 96
+    },
+    {
+      "name": "/pdm-rw-fi-test-rw_node-1",
+      "state": "running",
+      "health": null,
+      "oom": false,
+      "restarts": 0,
+      "memory_limit_mib": 160
+    },
+    {
+      "name": "/pdm-rw-fi-test-rw_subscription-1",
+      "state": "running",
+      "health": "healthy",
+      "oom": false,
+      "restarts": 0,
+      "memory_limit_mib": 192
+    },
+    {
+      "name": "/pdm-rw-fi-test-rw_panel-1",
+      "state": "running",
+      "health": "healthy",
+      "oom": false,
+      "restarts": 0,
+      "memory_limit_mib": 512
+    },
+    {
+      "name": "/pdm-rw-fi-test-rw_db-1",
+      "state": "running",
+      "health": "healthy",
+      "oom": false,
+      "restarts": 0,
+      "memory_limit_mib": 160
+    },
+    {
+      "name": "/pdm-rw-fi-test-rw_valkey-1",
+      "state": "running",
+      "health": "healthy",
+      "oom": false,
+      "restarts": 0,
+      "memory_limit_mib": 32
+    }
+  ],
+  "existing_caddy_changed_only_for_acme": true,
+  "main_bot_and_user_databases_changed": false,
+  "pending": [
+    "owner MFA enrollment",
+    "clean provider VPS roles with public DNS (Debian WSL role tests passed)",
+    "external IPv6 on a host with global IPv6 (FI has no global IPv6; network namespace tests passed)",
+    "48h observation"
+  ],
+  "github_published": false,
+  "observation": {
+    "started_at_utc": "2026-10-08T23:26:05Z",
+    "deadline_utc": "2026-10-10T23:26:05Z",
+    "interval_seconds": 300,
+    "report": "/var/lib/pdm-remnawave-observation/fi-test/summary.json",
+    "completed": false
+  }
+}
