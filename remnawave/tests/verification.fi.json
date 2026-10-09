@@ -180,7 +180,10 @@
     "external IPv6 on a host with global IPv6 (FI has no global IPv6; network namespace tests passed)",
     "48h observation"
   ],
-  "github_published": false,
+  "github_published": true,
+  "github_commit": "849821f",
+  "published_raw_process_substitution_and_uninstall": "pass",
+  "observation_heartbeat_id": "remnawave-fi",
   "observation": {
     "started_at_utc": "2026-10-08T23:26:05Z",
     "deadline_utc": "2026-10-10T23:26:05Z",
