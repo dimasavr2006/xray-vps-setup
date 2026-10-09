@@ -3,7 +3,14 @@
   "date": "2026-10-09",
   "scope": "Installer plan follow-up items 1, 2, 3, 7",
   "runtime": "Linux/Bash/Docker; no Python installer runtime",
-  "bash_checks": {"main":44,"recovery":9,"stats":7,"interruption_wizard_mfa":7,"tokens":7,"total":74},
+  "bash_checks": {
+    "main": 44,
+    "recovery": 9,
+    "stats": 7,
+    "interruption_wizard_mfa": 7,
+    "tokens": 7,
+    "total": 74
+  },
   "checks": {
     "live_token_rotation_subscription_and_installer": "pass",
     "lost_token_create_reply_keeps_old_until_candidate_ready": "pass; own unpublished orphan revoked; one active token remains",
@@ -28,13 +35,29 @@
     "separate_remnawave_authentication": "pass; authenticated Caddy session without Remnawave JWT receives 401 from users API",
     "shellcheck_warning_level": "pass",
     "deterministic_entrypoint_build": "pass",
-    "fi_cli_promotion_and_mfa_offhost_backup": "pass; doctor verified; backup checksum verified"
+    "fi_cli_promotion_and_mfa_offhost_backup": "pass; doctor verified; backup checksum verified",
+    "published_raw_entrypoints": "pass: byte-match canonical source; wget process substitution preview and prepared uninstall passed"
   },
-  "cleanup": {"owned_ci_containers_networks_volumes_removed":true,"ci_mfa_backup_saved_offhost":true,"base_debian_and_image_cache_retained":true},
-  "observation": {"stopped_by_owner":true,"timer_enabled":false,"timer_active":false,"heartbeat_exists":false,"samples":85,"failed_samples":0,"max_gap_seconds":301,"completed_48h":false,"offhost_reports_saved":true},
+  "cleanup": {
+    "owned_ci_containers_networks_volumes_removed": true,
+    "ci_mfa_backup_saved_offhost": true,
+    "base_debian_and_image_cache_retained": true
+  },
+  "observation": {
+    "stopped_by_owner": true,
+    "timer_enabled": false,
+    "timer_active": false,
+    "heartbeat_exists": false,
+    "samples": 85,
+    "failed_samples": 0,
+    "max_gap_seconds": 301,
+    "completed_48h": false,
+    "offhost_reports_saved": true
+  },
   "limits": [
     "Local bootstrap interruption tests exercised real deployment/API, with public DNS/resource admission tested separately and internal TLS; not a provider DNS/ACME acceptance.",
     "No claim of recovery from physical disk damage or loss of the installation directory.",
     "Clean provider VPS, external global IPv6 and full legacy transit failure-isolation acceptance remain open."
-  ]
+  ],
+  "github_code_commit": "8df96cfb53cbe85c86ce2e12ed1760bd2213d124"
 }

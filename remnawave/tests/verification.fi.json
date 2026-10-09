@@ -192,7 +192,7 @@
     "external IPv6 on a host with global IPv6 (FI has no global IPv6; network namespace tests passed)"
   ],
   "github_published": true,
-  "github_commit": "4f035e9b6f137f89325aea0e94e3de70a90970bd",
+  "github_commit": "8df96cfb53cbe85c86ce2e12ed1760bd2213d124",
   "published_raw_process_substitution_and_uninstall": "pass: current release files byte-match canonical LF source",
   "observation_heartbeat_id": "remnawave-fi",
   "observation": {
