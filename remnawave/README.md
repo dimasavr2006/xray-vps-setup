@@ -256,13 +256,21 @@ require a separate data migration. A manual `rollback --archive FILE` restores
 the full snapshot, including its database. See the
 [official update guide](https://docs.rw/install/upgrading/).
 
+Already cached images with the exact pinned digest are reused. A component
+upgrade pulls only the selected service's missing image; it still recreates and
+checks that service. See the [execution audit](installer/OPTIMIZATION.md) for
+startup, maintenance and removal optimizations.
+
 Optional interval accounting is documented in [stats/README.md](stats/README.md).
 Additional commands include `preflight`, `tls-test`, `ssh prepare` and
 `ssh harden`; see `rwctl --help` and [developer notes](installer/README.md).
 
 ## Verification
 
-103 Bash checks and ShellCheck passed. Host-security tests cover root key
+The first optimization candidate passed 115 Bash checks and ShellCheck. Eight
+additional removal checks and native armed-UFW uninstall passed in the follow-up.
+The current working candidate is paused before final verification and publication;
+its API/pull deadline changes still need targeted failure tests. Host-security tests cover root key
 validation/preservation, public port discovery, legacy config compatibility,
 active-policy restrictions and read-only preview. Native Debian UFW namespace
 tests preserved TCP/UDP/IPv6 services, blocked unapproved listeners, confirmed

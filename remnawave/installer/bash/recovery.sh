@@ -154,7 +154,7 @@ rw_restore() {
     rw_preflight
     RW_STATS_SOURCE_MANIFEST=
     rw_restore_files
-    rw_compose --profile public --profile node pull
+    rw_pull || rw_die 'Restore image pull failed or exceeded 15 minutes; retry to resume cached downloads.'
     rw_stats_patch
     rw_stop_writers; rw_restore_data "$RW_BACKUP"
     rw_firewall; rw_existing_caddy_apply

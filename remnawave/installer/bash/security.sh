@@ -122,7 +122,7 @@ rw_security_apply() {
         rw_die 'A host firewall change is already awaiting a fresh SSH connection.'
     fi
     if ! command -v ufw >/dev/null 2>&1; then
-        apt-get update -q
+        rw_apt_update
         DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ufw
     fi
     [[ -f $RW_OUT/private/security-preserved-ports.json ]] || rw_security_capture
@@ -235,4 +235,29 @@ rw_security_status() {
     rw_owned
     jq '{root_key:.security.root_key,ufw:.security.ufw}' "$RW_OUT/manifest.json"
     if command -v ufw >/dev/null 2>&1; then ufw status verbose; fi
+}
+rw_security_remove_rules() {
+    # show added includes stored rules even when UFW is inactive after rollback.
+    # Parse only the two rule shapes this installer creates; never evaluate text.
+    local line body source port
+    local -a rule=()
+    ufw show added > "$RW_TMP/ufw-added" || rw_die 'Cannot read stored UFW rules.'
+    : > "$RW_TMP/ufw-remove"
+    while IFS= read -r line; do
+        [[ $line == *" comment '$RW_PROJECT'" ]] || continue
+        body=${line%" comment '$RW_PROJECT'"}; body=${body#ufw }
+        read -r -a rule <<< "$body"
+        if [[ ${#rule[@]} == 2 && ${rule[0]} == allow && ${rule[1]} =~ ^[0-9]{1,5}/(tcp|udp)$ ]]; then
+            port=${rule[1]%/*}
+        elif [[ ${#rule[@]} == 9 && ${rule[0]} == allow && ${rule[1]} == from && ${rule[3]} == to && ${rule[4]} == any && ${rule[5]} == port && ${rule[7]} == proto && ${rule[8]} == tcp ]]; then
+            source=${rule[2]}; port=${rule[6]}
+            [[ $source =~ ^[0-9a-fA-F:.]+$ ]] || rw_die 'Unexpected source in an owned UFW rule.'
+        else rw_die 'An owned UFW rule changed shape; review it before removal.'; fi
+        [[ $port =~ ^[1-9][0-9]{0,4}$ ]] && (( port<=65535 )) || rw_die 'Invalid port in an owned UFW rule.'
+        printf '%s\n' "$body" >> "$RW_TMP/ufw-remove"
+    done < "$RW_TMP/ufw-added"
+    while IFS= read -r body; do
+        read -r -a rule <<< "$body"
+        ufw --force delete "${rule[@]}" >/dev/null || rw_die 'Cannot remove an owned UFW rule.'
+    done < "$RW_TMP/ufw-remove"
 }

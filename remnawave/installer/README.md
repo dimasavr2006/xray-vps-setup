@@ -23,6 +23,9 @@ shellcheck --severity=warning rw-setup.sh rwctl uninstall.sh installer/build-ent
 
 The builder generates `rw-setup.sh`, `uninstall.sh` and `rwctl` deterministically.
 Deployment saves a self-contained `rwctl` beside each installation's config.
+The removal entrypoint excludes installation templates and unused feature
+modules. See the [execution audit](OPTIMIZATION.md) for optimization decisions,
+measurements and verification boundaries.
 There is no Python installer payload. Debian UFW installs its own Python
 runtime dependencies through APT.
 
@@ -59,11 +62,14 @@ bash tests/bash/interruption-unit.sh
 bash tests/bash/wizard-unit.sh
 bash tests/bash/summary-unit.sh
 bash tests/bash/security-unit.sh
+bash tests/bash/optimization-unit.sh
+bash tests/bash/removal-unit.sh
 bash tests/bash/http-entrypoints.sh
 node tests/stats-hook.cjs
 ```
 
-The first eight suites contain 103 checks. HTTP tests additionally exercise wget
+The first nine suites contain 115 checks; removal-unit adds eight checks. The
+latest follow-up changes await final verification. HTTP tests additionally exercise wget
 and process substitution without a source checkout. `mfa-live.cjs` and
 `stats-live.py` are development test clients, not VPS installer requirements.
 Run live tests only against a disposable, explicitly selected installation.

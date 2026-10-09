@@ -47,6 +47,7 @@ rw_resource_checks() {
 }
 rw_dns_checks() {
     local domain family
+    { rw_config_filter | sed '/^\.$/,$d'; printf '\n[inputs|select(ip)|ipnorm]|unique\n'; } > "$RW_TMP/dns.jq"
     while IFS= read -r domain; do
         : > "$RW_TMP/dns.txt"
         for family in A AAAA; do
@@ -55,26 +56,25 @@ rw_dns_checks() {
             awk '$4=="A" || $4=="AAAA" {print $5}' "$RW_TMP/dig-answer.txt" >> "$RW_TMP/dns.txt"
         done
         # CNAMEs are excluded, but every A/AAAA address must match the declared set.
-        { rw_config_filter | sed '/^\.$/,$d'; printf '\n[inputs|select(ip)|ipnorm]|unique\n'; } > "$RW_TMP/dns.jq"
         jq -Rn -f "$RW_TMP/dns.jq" < "$RW_TMP/dns.txt" > "$RW_TMP/dns.json"
         jq -e --slurpfile actual "$RW_TMP/dns.json" '.public_addresses == $actual[0]' "$RW_CFG" >/dev/null || rw_die "A/AAAA records for $domain do not match public_addresses."
-    done < <(jq -r '.domains[]' "$RW_CFG")
+    done < <(jq -r '.domains|[.[]]|unique[]' "$RW_CFG")
 }
 rw_docker_ownership() {
-    local id owner project configs
-    while IFS= read -r id; do
-        [[ -n $id ]] || continue
-        owner=$(docker inspect --format '{{index .Config.Labels "io.pdm.remnawave.installation"}}' "$id")
-        project=$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project"}}' "$id")
-        configs=$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project.config_files"}}' "$id")
-        [[ $owner == "$RW_OWNER" && $project == "$RW_PROJECT" && $configs == "$RW_OUT/compose.json" ]] || rw_die 'A Compose project with this name belongs to another installation.'
-    done < <(docker ps -aq --filter "label=com.docker.compose.project=$RW_PROJECT")
+    local -a ids=()
+    docker ps -aq --filter "label=com.docker.compose.project=$RW_PROJECT" > "$RW_TMP/ownership-ids" || rw_die 'Cannot list installation containers.'
+    mapfile -t ids < "$RW_TMP/ownership-ids"
+    (( ${#ids[@]} )) || return 0
+    docker inspect --format '{{json .Config.Labels}}' "${ids[@]}" > "$RW_TMP/ownership-labels.jsonl" || rw_die 'Cannot inspect installation containers.'
+    jq -se --arg owner "$RW_OWNER" --arg project "$RW_PROJECT" --arg configs "$RW_OUT/compose.json" --argjson count "${#ids[@]}" '
+      length==$count and all(.[]; .["io.pdm.remnawave.installation"]==$owner and .["com.docker.compose.project"]==$project and .["com.docker.compose.project.config_files"]==$configs)' "$RW_TMP/ownership-labels.jsonl" >/dev/null || rw_die 'A Compose project with this name belongs to another installation.'
 }
 rw_port_checks() {
     local name port id pids row socket_pids owned_ids publication
     owned_ids=$(docker ps -q --filter "label=io.pdm.remnawave.installation=$RW_OWNER")
     : > "$RW_TMP/owned-pids"
     for id in $owned_ids; do docker top "$id" -eo pid | awk 'NR>1 && $1~/^[0-9]+$/ {print $1}' >> "$RW_TMP/owned-pids"; done
+    ss -H -lntp > "$RW_TMP/tcp-listeners" || rw_die 'Cannot read TCP listeners.'
     while IFS=$'\t' read -r name port; do
         while IFS= read -r row; do
             [[ -n $row ]] || continue
@@ -91,7 +91,7 @@ rw_port_checks() {
                     (( publication )) || rw_die "TCP port $port ($name) is used by another service."
                 fi
             done
-        done < <(ss -H -lntp | awk -v p="$port" '$4 ~ (":" p "$") {print}')
+        done < <(awk -v p="$port" '$4 ~ (":" p "$") {print}' "$RW_TMP/tcp-listeners")
     done < <(jq -r '.ports|to_entries[]|[.key,.value]|@tsv' "$RW_CFG"; if rw_stats_enabled; then printf 'stats_api\t%s\n' "$(rw_stats_port)"; fi)
     # Docker NAT publications can exist without a listening docker-proxy process.
     while IFS= read -r id; do
@@ -122,7 +122,11 @@ rw_network_check() {
       ($subnet|bounds) as $wanted | [inputs|select(test("^[0-9.]+/[0-9]+$"))|bounds] | all(.[]; .[1]<$wanted[0] or .[0]>$wanted[1])' < "$RW_TMP/networks" | grep -qx true || rw_die 'docker_subnet overlaps an existing network; specify another subnet.'
 }
 rw_preflight() {
-    rw_os; rw_resource_checks; rw_dns_checks
+    # apply already checked DNS/resources. A newly installed daemon consumes RAM,
+    # so repeat resource admission in that case before starting any containers.
+    rw_os
+    if [[ ${1:-} != --host-checked ]]; then rw_resource_checks; rw_dns_checks
+    elif [[ ${RW_DOCKER_INSTALLED:-0} == 1 ]]; then rw_resource_checks; fi
     /usr/sbin/sshd -t || rw_die 'sshd -t failed; SSH was not changed.'
     [[ $(timedatectl show -p NTPSynchronized --value) == yes ]] || rw_die 'Time synchronization could not be verified.'
     nft -j list ruleset >/dev/null || rw_die 'Cannot read the current firewall rules.'

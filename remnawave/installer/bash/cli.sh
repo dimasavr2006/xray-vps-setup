@@ -163,7 +163,7 @@ rw_main() {
     [[ -z $RW_ROLE_ARG || $RW_ROLE_ARG == "$RW_ROLE" ]] || rw_die 'The role does not match the configuration.'
     case $command in
       plan) rw_plan;;
-      setup|apply) if (( RW_DRY_RUN )); then rw_plan; else rw_deps; rw_apply; rw_track_files; fi;;
+      setup|apply) if (( RW_DRY_RUN )); then rw_plan; else [[ $command == setup ]] || rw_deps; rw_apply; rw_track_files; fi;;
       preflight) rw_preflight;;
       doctor) rw_doctor;;
       info) rw_show_summary;;

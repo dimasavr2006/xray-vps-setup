@@ -1,189 +1,11 @@
 #!/usr/bin/env bash
 # Generated from installer/bash by installer/build-entrypoints.sh.
+# Shared modules also define setup-only variables/helpers; full entrypoints lint them.
+# shellcheck disable=SC2034,SC2120
 set +x
 set -euo pipefail
 export LC_ALL=C
 umask 077
-rw_versions() {
-cat <<'RW_VERSIONS'
-{
-  "schema_version": 1,
-  "environment_id": null,
-  "status": "runtime-verified-fi-parallel-test",
-  "resolved_at": "2026-10-08T16:25:08.239404+03:00",
-  "components": {
-    "panel": {
-      "image": "remnawave/backend@sha256:b16d724b90fd7c9fec2df04bd28938a671cafc62894105068e11550ee3449c56",
-      "source_tag": "3.4.5",
-      "platforms": [
-        {
-          "architecture": "arm64",
-          "os": "linux"
-        },
-        {
-          "architecture": "amd64",
-          "os": "linux"
-        }
-      ],
-      "runtime_verified": true
-    },
-    "node": {
-      "image": "remnawave/node@sha256:1f97485b4bc7e4944f1ae95cc57d176376813b0022e9567b705f384f1a2e909d",
-      "source_tag": "3.4.2",
-      "platforms": [
-        {
-          "architecture": "amd64",
-          "os": "linux"
-        },
-        {
-          "architecture": "arm64",
-          "os": "linux"
-        }
-      ],
-      "runtime_verified": true
-    },
-    "postgres": {
-      "image": "library/postgres@sha256:a02db8cac496f15b094798a38254f14d6e00741f709360e5e00bb6668ea31636",
-      "source_tag": "18.4",
-      "platforms": [
-        {
-          "architecture": "amd64",
-          "os": "linux"
-        },
-        {
-          "architecture": "arm",
-          "os": "linux",
-          "variant": "v5"
-        },
-        {
-          "architecture": "arm",
-          "os": "linux",
-          "variant": "v7"
-        },
-        {
-          "architecture": "arm64",
-          "os": "linux",
-          "variant": "v8"
-        },
-        {
-          "architecture": "386",
-          "os": "linux"
-        },
-        {
-          "architecture": "ppc64le",
-          "os": "linux"
-        },
-        {
-          "architecture": "riscv64",
-          "os": "linux"
-        },
-        {
-          "architecture": "s390x",
-          "os": "linux"
-        }
-      ],
-      "runtime_verified": true
-    },
-    "valkey": {
-      "image": "valkey/valkey@sha256:48332870af354a799964c0012ae1194a0bf2bf894eb508f945810596dc2d8d11",
-      "source_tag": "9-alpine",
-      "platforms": [
-        {
-          "architecture": "amd64",
-          "os": "linux"
-        },
-        {
-          "architecture": "arm64",
-          "os": "linux"
-        },
-        {
-          "architecture": "arm",
-          "os": "linux",
-          "variant": "v7"
-        },
-        {
-          "architecture": "ppc64le",
-          "os": "linux"
-        }
-      ],
-      "runtime_verified": true
-    },
-    "caddy_auth": {
-      "image": "remnawave/caddy-with-auth@sha256:2098e1331c3499781791582076491b38545e27140c5a28b5c476a08b9b5c5f6f",
-      "source_tag": "latest",
-      "platforms": [
-        {
-          "architecture": "amd64",
-          "os": "linux"
-        }
-      ],
-      "runtime_verified": true
-    },
-    "subscription": {
-      "image": "remnawave/subscription-page@sha256:04e8d479afb3598024e4018e9e15cd7fe879938250090a690ba39f1ee91b79ac",
-      "source_tag": "latest",
-      "platforms": [
-        {
-          "architecture": "amd64",
-          "os": "linux"
-        },
-        {
-          "architecture": "arm64",
-          "os": "linux"
-        }
-      ],
-      "runtime_verified": true
-    }
-  },
-  "verified_scope": "Debian 13 amd64; FI compact parallel panel-node; 2026-10-09"
-}
-RW_VERSIONS
-}
-rw_auth_global() {
-cat <<'RW_AUTH_GLOBAL'
-	order authenticate before respond
-	order authorize before respond
-	security {
-		local identity store localdb {
-			realm local
-			path /data/.local/caddy/users.json
-		}
-		authentication portal remnawaveportal {
-			crypto default token lifetime {$AUTH_TOKEN_LIFETIME}
-			enable identity store localdb
-			cookie domain {$REMNAWAVE_PANEL_DOMAIN}
-			ui {
-				links {
-					"Remnawave" "/dashboard/home" icon "las la-tachometer-alt"
-					"My Identity" "/r/whoami" icon "las la-user"
-					"API Keys" "/r/settings/apikeys" icon "las la-key"
-					"MFA" "/r/settings/mfa" icon "lab la-keycdn"
-				}
-			}
-			transform user {
-				match origin local
-				action add role authp/admin
-				require mfa
-			}
-		}
-		authorization policy panelpolicy {
-			set auth url /r
-			allow roles authp/admin
-			with api key auth portal remnawaveportal realm local
-			acl rule {
-				comment "Accept"
-				match role authp/admin
-				allow stop log info
-			}
-			acl rule {
-				comment "Deny"
-				match any
-				deny log warn
-			}
-		}
-	}
-RW_AUTH_GLOBAL
-}
 rw_config_filter() {
 cat <<'RW_CONFIG_JQ'
 def ip4:
@@ -266,716 +88,6 @@ def require($ok; $message): if $ok then . else error($message) end;
 | require(.node_country | type == "string" and test("^[A-Z]{2}$"); "invalid country code")
 RW_CONFIG_JQ
 }
-rw_stats_schema() {
-cat <<'RW_STATS_PAYLOAD'
--- Remnawave 3.4.5 addon, schema version 1. All times are observations in UTC.
--- No foreign keys point to panel history: retention cannot erase our evidence.
-BEGIN;
-DO $$
-BEGIN
-  IF (SELECT array_agg(column_name||':'||data_type ORDER BY ordinal_position)
-      FROM information_schema.columns WHERE table_schema='public' AND table_name='nodes_user_usage_history')
-     IS DISTINCT FROM ARRAY['node_id:bigint','user_id:bigint','total_bytes:bigint',
-                            'created_at:date','updated_at:timestamp without time zone'] THEN
-    RAISE EXCEPTION 'Unsupported nodes_user_usage_history schema';
-  END IF;
-END $$;
-CREATE SCHEMA IF NOT EXISTS pdm_stats;
-CREATE TABLE IF NOT EXISTS pdm_stats.metadata (
-  singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
-  version integer NOT NULL CHECK (version=1), installed_at timestamptz NOT NULL,
-  panel_digest text NOT NULL, max_sample_gap_seconds integer NOT NULL DEFAULT 90
-);
-INSERT INTO pdm_stats.metadata(singleton,version,installed_at,panel_digest)
-VALUES (true,1,clock_timestamp(),'b16d724b90fd7c9fec2df04bd28938a671cafc62894105068e11550ee3449c56')
-ON CONFLICT DO NOTHING;
-CREATE TABLE IF NOT EXISTS pdm_stats.node_state (
-  node_id bigint PRIMARY KEY, node_uuid uuid NOT NULL, first_sample_at timestamptz,
-  last_sample_at timestamptz, last_sample_succeeded boolean NOT NULL DEFAULT false
-);
-CREATE TABLE IF NOT EXISTS pdm_stats.samples (
-  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  node_id bigint NOT NULL, node_uuid uuid NOT NULL,
-  observed_at timestamptz NOT NULL, previous_at timestamptz,
-  succeeded boolean NOT NULL, policy_ignore_below_bytes bigint NOT NULL DEFAULT 0
-);
-CREATE INDEX IF NOT EXISTS samples_node_time ON pdm_stats.samples(node_id,observed_at);
-CREATE TABLE IF NOT EXISTS pdm_stats.expected (
-  sample_id bigint NOT NULL REFERENCES pdm_stats.samples(id), node_id bigint NOT NULL,
-  user_id bigint NOT NULL, remaining_bytes bigint NOT NULL CHECK (remaining_bytes>=0),
-  invalidated boolean NOT NULL DEFAULT false,
-  PRIMARY KEY(sample_id,user_id)
-);
-ALTER TABLE pdm_stats.expected ADD COLUMN IF NOT EXISTS invalidated boolean NOT NULL DEFAULT false;
-DROP INDEX IF EXISTS pdm_stats.expected_pending;
-CREATE INDEX IF NOT EXISTS expected_pending ON pdm_stats.expected(node_id,user_id,sample_id)
-WHERE remaining_bytes>0 AND NOT invalidated;
-CREATE TABLE IF NOT EXISTS pdm_stats.counter_state (
-  node_id bigint NOT NULL, user_id bigint NOT NULL, source_day date NOT NULL,
-  node_uuid uuid NOT NULL, total_bytes bigint NOT NULL,
-  epoch bigint NOT NULL DEFAULT 0, last_observed_at timestamptz NOT NULL,
-  deleted boolean NOT NULL DEFAULT false,
-  PRIMARY KEY(node_id,user_id,source_day)
-);
-CREATE TABLE IF NOT EXISTS pdm_stats.events (
-  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  node_id bigint NOT NULL, node_uuid uuid NOT NULL, user_id bigint NOT NULL,
-  observed_at timestamptz NOT NULL, source_day date NOT NULL, epoch bigint NOT NULL,
-  delta_bytes bigint NOT NULL CHECK(delta_bytes>=0)
-);
-CREATE INDEX IF NOT EXISTS events_user_time ON pdm_stats.events(user_id,observed_at);
-CREATE TABLE IF NOT EXISTS pdm_stats.gaps (
-  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  node_id bigint NOT NULL, user_id bigint,
-  start_at timestamptz NOT NULL, end_at timestamptz NOT NULL,
-  reason text NOT NULL, CHECK(end_at>=start_at)
-);
-CREATE INDEX IF NOT EXISTS gaps_user_time ON pdm_stats.gaps(user_id,start_at,end_at);
-CREATE TABLE IF NOT EXISTS pdm_stats.hours (
-  node_uuid uuid NOT NULL, node_id bigint NOT NULL, user_id bigint NOT NULL,
-  hour_at timestamptz NOT NULL, total_bytes bigint NOT NULL CHECK(total_bytes>=0),
-  raw_preserved boolean NOT NULL, PRIMARY KEY(node_uuid,user_id,hour_at)
-);
-CREATE TABLE IF NOT EXISTS pdm_stats.checkpoints (
-  name text PRIMARY KEY, observed_at timestamptz NOT NULL
-);
-
--- Initialize current panel counters as a baseline; do not fabricate old observations.
-INSERT INTO pdm_stats.counter_state(node_id,user_id,source_day,node_uuid,total_bytes,last_observed_at)
-SELECT h.node_id,h.user_id,h.created_at,n.uuid,h.total_bytes,clock_timestamp()
-FROM public.nodes_user_usage_history h JOIN public.nodes n ON n.id=h.node_id
-ON CONFLICT DO NOTHING;
-
-CREATE OR REPLACE FUNCTION pdm_stats.observe_sample(
-  p_node_id bigint,p_uuid uuid,p_succeeded boolean,p_users jsonb,p_threshold bigint DEFAULT 0)
-RETURNS bigint LANGUAGE plpgsql SECURITY DEFINER SET search_path=pdm_stats,pg_catalog AS $$
-DECLARE previous timestamptz; observed timestamptz:=clock_timestamp(); sid bigint; item jsonb;
-BEGIN
-  IF NOT EXISTS(SELECT 1 FROM public.nodes WHERE id=p_node_id AND uuid=p_uuid)
-     OR jsonb_typeof(p_users)<>'array' OR p_threshold<0 THEN
-    RAISE EXCEPTION 'Invalid sample node or payload';
-  END IF;
-  INSERT INTO pdm_stats.node_state(node_id,node_uuid) VALUES(p_node_id,p_uuid) ON CONFLICT DO NOTHING;
-  SELECT last_sample_at INTO previous FROM pdm_stats.node_state WHERE node_id=p_node_id FOR UPDATE;
-  INSERT INTO pdm_stats.samples(node_id,node_uuid,observed_at,previous_at,succeeded,policy_ignore_below_bytes)
-  VALUES(p_node_id,p_uuid,observed,previous,p_succeeded,p_threshold) RETURNING id INTO sid;
-  IF p_succeeded THEN
-    FOR item IN SELECT value FROM jsonb_array_elements(p_users) LOOP
-      IF (item->>'user_id') !~ '^[1-9][0-9]*$' OR (item->>'bytes') !~ '^(0|[1-9][0-9]*)$' THEN
-        RAISE EXCEPTION 'Invalid sample counter';
-      END IF;
-      INSERT INTO pdm_stats.expected(sample_id,node_id,user_id,remaining_bytes)
-      VALUES(sid,p_node_id,(item->>'user_id')::bigint,(item->>'bytes')::bigint);
-    END LOOP;
-  END IF;
-  IF previous IS NOT NULL AND (NOT p_succeeded OR observed-previous>
-      (SELECT max_sample_gap_seconds*interval '1 second' FROM pdm_stats.metadata)) THEN
-    INSERT INTO pdm_stats.gaps(node_id,start_at,end_at,reason)
-    VALUES(p_node_id,previous,observed,CASE WHEN p_succeeded THEN 'sample_gap' ELSE 'sample_failed' END);
-  END IF;
-  UPDATE pdm_stats.node_state SET last_sample_at=observed,
-    last_sample_succeeded=p_succeeded,
-    first_sample_at=CASE WHEN p_succeeded THEN coalesce(first_sample_at,observed) ELSE first_sample_at END
-  WHERE node_id=p_node_id;
-  RETURN sid;
-END $$;
-
-CREATE OR REPLACE FUNCTION pdm_stats.capture_history()
-RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path=pdm_stats,pg_catalog AS $$
-DECLARE state pdm_stats.counter_state%ROWTYPE; observed timestamptz:=clock_timestamp();
-        delta bigint:=0; next_epoch bigint:=0; remaining bigint; allocated bigint;
-        expected_row record; node_uuid_value uuid; why text;
-BEGIN
-  IF TG_OP='DELETE' THEN
-    UPDATE pdm_stats.counter_state SET deleted=true
-    WHERE node_id=OLD.node_id AND user_id=OLD.user_id AND source_day=OLD.created_at;
-    RETURN OLD;
-  END IF;
-  SELECT * INTO state FROM pdm_stats.counter_state
-  WHERE node_id=NEW.node_id AND user_id=NEW.user_id AND source_day=NEW.created_at FOR UPDATE;
-  SELECT uuid INTO node_uuid_value FROM public.nodes WHERE id=NEW.node_id;
-  IF node_uuid_value IS NULL THEN RAISE EXCEPTION 'History node missing'; END IF;
-  IF state.node_id IS NULL THEN
-    delta:=NEW.total_bytes;
-  ELSIF (TG_OP='INSERT' AND state.deleted) OR NEW.total_bytes<state.total_bytes THEN
-    next_epoch:=state.epoch+1;
-    why:=CASE WHEN TG_OP='INSERT' THEN 'row_recreated' ELSE 'counter_decreased' END;
-  ELSE
-    next_epoch:=state.epoch;
-    delta:=NEW.total_bytes-state.total_bytes;
-  END IF;
-  IF delta<0 THEN RAISE EXCEPTION 'Negative history delta'; END IF;
-  IF why IS NOT NULL THEN
-    INSERT INTO pdm_stats.gaps(node_id,user_id,start_at,end_at,reason)
-    VALUES(NEW.node_id,NEW.user_id,state.last_observed_at,observed,why);
-    UPDATE pdm_stats.expected SET invalidated=true
-    WHERE node_id=NEW.node_id AND user_id=NEW.user_id AND remaining_bytes>0;
-  END IF;
-  INSERT INTO pdm_stats.counter_state(node_id,user_id,source_day,node_uuid,total_bytes,epoch,last_observed_at)
-  VALUES(NEW.node_id,NEW.user_id,NEW.created_at,node_uuid_value,NEW.total_bytes,next_epoch,observed)
-  ON CONFLICT(node_id,user_id,source_day) DO UPDATE SET total_bytes=EXCLUDED.total_bytes,
-    epoch=EXCLUDED.epoch,last_observed_at=EXCLUDED.last_observed_at,deleted=false;
-  IF delta>0 THEN
-    remaining:=delta;
-    FOR expected_row IN SELECT ex.*,sm.observed_at AS sample_observed_at FROM pdm_stats.expected ex
-      JOIN pdm_stats.samples sm ON sm.id=ex.sample_id
-      WHERE ex.node_id=NEW.node_id AND ex.user_id=NEW.user_id AND ex.remaining_bytes>0 AND NOT ex.invalidated
-      ORDER BY ex.sample_id FOR UPDATE OF ex LOOP
-      allocated:=least(remaining,expected_row.remaining_bytes);
-      INSERT INTO pdm_stats.events(node_id,node_uuid,user_id,observed_at,source_day,epoch,delta_bytes)
-      VALUES(NEW.node_id,node_uuid_value,NEW.user_id,expected_row.sample_observed_at,NEW.created_at,next_epoch,allocated);
-      UPDATE pdm_stats.hours SET total_bytes=total_bytes+allocated
-      WHERE node_uuid=node_uuid_value AND user_id=NEW.user_id
-        AND hour_at=date_trunc('hour',expected_row.sample_observed_at AT TIME ZONE 'UTC') AT TIME ZONE 'UTC';
-      UPDATE pdm_stats.expected SET remaining_bytes=remaining_bytes-allocated
-      WHERE sample_id=expected_row.sample_id AND user_id=NEW.user_id;
-      remaining:=remaining-allocated;
-      EXIT WHEN remaining=0;
-    END LOOP;
-    IF remaining>0 THEN
-      INSERT INTO pdm_stats.events(node_id,node_uuid,user_id,observed_at,source_day,epoch,delta_bytes)
-      VALUES(NEW.node_id,node_uuid_value,NEW.user_id,observed,NEW.created_at,next_epoch,remaining);
-      INSERT INTO pdm_stats.gaps(node_id,user_id,start_at,end_at,reason)
-      VALUES(NEW.node_id,NEW.user_id,coalesce(state.last_observed_at,
-        (SELECT installed_at FROM pdm_stats.metadata)),observed,'unwitnessed_delta');
-    END IF;
-  END IF;
-  RETURN NEW;
-EXCEPTION WHEN OTHERS THEN
-  -- An addon failure cannot roll back the panel's authoritative traffic write.
-  RAISE WARNING 'PDM_STATS_CAPTURE_FAILED: %', SQLSTATE;
-  BEGIN
-    INSERT INTO pdm_stats.gaps(node_id,user_id,start_at,end_at,reason)
-    VALUES(coalesce(NEW.node_id,OLD.node_id),coalesce(NEW.user_id,OLD.user_id),
-      coalesce(state.last_observed_at,observed),observed,'capture_error');
-  EXCEPTION WHEN OTHERS THEN NULL;
-  END;
-  RETURN CASE WHEN TG_OP='DELETE' THEN OLD ELSE NEW END;
-END $$;
-DROP TRIGGER IF EXISTS pdm_stats_history ON public.nodes_user_usage_history;
-CREATE TRIGGER pdm_stats_history AFTER INSERT OR UPDATE OR DELETE ON public.nodes_user_usage_history
-FOR EACH ROW EXECUTE FUNCTION pdm_stats.capture_history();
-
-CREATE OR REPLACE FUNCTION pdm_stats.add_checkpoint(p_name text,p_at timestamptz)
-RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path=pdm_stats,pg_catalog AS $$
-BEGIN
-  IF EXISTS(SELECT 1 FROM pdm_stats.hours WHERE hour_at=date_trunc('hour',p_at AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
-            AND NOT raw_preserved) THEN RAISE EXCEPTION 'Checkpoint hour was already compacted'; END IF;
-  INSERT INTO pdm_stats.checkpoints VALUES(p_name,p_at) ON CONFLICT DO NOTHING;
-  IF EXISTS(SELECT 1 FROM pdm_stats.checkpoints WHERE name=p_name AND observed_at<>p_at) THEN
-    RAISE EXCEPTION 'Checkpoint is immutable'; END IF;
-END $$;
-
-CREATE OR REPLACE FUNCTION pdm_stats.compact(p_before timestamptz)
-RETURNS bigint LANGUAGE plpgsql SECURITY DEFINER SET search_path=pdm_stats,pg_catalog AS $$
-DECLARE removed bigint;
-BEGIN
-  IF p_before>date_trunc('hour',(clock_timestamp()-interval '48 hours') AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
-    THEN RAISE EXCEPTION 'Only closed observations older than 48h may be compacted'; END IF;
-  WITH grouped AS (
-    SELECT e.node_uuid,e.node_id,e.user_id,
-      date_trunc('hour',e.observed_at AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' AS hour_at,sum(e.delta_bytes) AS bytes
-    FROM pdm_stats.events e WHERE e.observed_at<p_before
-      AND NOT EXISTS(SELECT 1 FROM pdm_stats.hours h WHERE h.node_uuid=e.node_uuid AND h.user_id=e.user_id
-        AND h.hour_at=date_trunc('hour',e.observed_at AT TIME ZONE 'UTC') AT TIME ZONE 'UTC')
-    GROUP BY e.node_uuid,e.node_id,e.user_id,date_trunc('hour',e.observed_at AT TIME ZONE 'UTC')
-  )
-  INSERT INTO pdm_stats.hours(node_uuid,node_id,user_id,hour_at,total_bytes,raw_preserved)
-  SELECT g.node_uuid,g.node_id,g.user_id,g.hour_at,g.bytes,
-    EXISTS(SELECT 1 FROM pdm_stats.checkpoints c WHERE
-      date_trunc('hour',c.observed_at AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'=g.hour_at)
-  FROM grouped g
-  ON CONFLICT DO NOTHING;
-  DELETE FROM pdm_stats.events e USING pdm_stats.hours h
-  WHERE e.node_uuid=h.node_uuid AND e.user_id=h.user_id AND e.observed_at>=h.hour_at
-    AND e.observed_at<h.hour_at+interval '1 hour' AND NOT h.raw_preserved;
-  GET DIAGNOSTICS removed=ROW_COUNT;
-  RETURN removed;
-END $$;
-
-CREATE OR REPLACE FUNCTION pdm_stats.status()
-RETURNS jsonb LANGUAGE sql SECURITY DEFINER SET search_path=pdm_stats,pg_catalog AS $$
-SELECT jsonb_build_object('schema_version',version,'installed_at',installed_at,
-                         'panel_digest',panel_digest,'observed_at',clock_timestamp()) FROM pdm_stats.metadata
-$$;
-
-CREATE OR REPLACE FUNCTION pdm_stats.usage(p_user bigint,p_start timestamptz,p_end timestamptz)
-RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pdm_stats,pg_catalog AS $$
-DECLARE result jsonb; observed timestamptz:=clock_timestamp(); born timestamptz;
-        effective_start timestamptz; maximum_gap interval;
-BEGIN
-  IF p_user<=0 OR p_start>p_end OR p_end>observed+interval '5 seconds' THEN
-    RAISE EXCEPTION 'Invalid user or observation interval'; END IF;
-  SELECT created_at AT TIME ZONE 'UTC' INTO born FROM public.users WHERE id=p_user;
-  effective_start:=greatest(p_start,coalesce(born,p_start));
-  SELECT max_sample_gap_seconds*interval '1 second' INTO maximum_gap FROM pdm_stats.metadata;
-  WITH totals AS (
-    SELECT node_id,node_uuid,sum(delta_bytes)::bigint AS bytes FROM pdm_stats.events e
-    WHERE user_id=p_user AND observed_at>=p_start AND observed_at<p_end
-      AND NOT EXISTS(SELECT 1 FROM pdm_stats.hours h WHERE h.node_uuid=e.node_uuid
-        AND h.user_id=e.user_id AND h.hour_at<=e.observed_at AND e.observed_at<h.hour_at+interval '1 hour'
-        AND h.hour_at>=p_start AND h.hour_at+interval '1 hour'<=p_end)
-    GROUP BY node_id,node_uuid
-    UNION ALL
-    SELECT node_id,node_uuid,total_bytes FROM pdm_stats.hours
-    WHERE user_id=p_user AND hour_at>=p_start AND hour_at+interval '1 hour'<=p_end
-  ), amounts AS (
-    SELECT node_id,node_uuid,sum(bytes)::bigint AS bytes FROM totals GROUP BY node_id,node_uuid
-  ), scope AS (
-    SELECT id AS node_id,uuid AS node_uuid FROM public.nodes
-    UNION SELECT node_id,node_uuid FROM amounts
-  ), coverage AS (
-    SELECT s.node_id,s.node_uuid,
-      coalesce((effective_start>=p_end AND NOT EXISTS(SELECT 1 FROM amounts a WHERE a.node_id=s.node_id AND a.bytes>0)) OR (
-        effective_start<p_end AND
-        st.first_sample_at<=effective_start AND st.last_sample_at>=p_end-maximum_gap
-        AND (st.last_sample_at>=p_end OR st.last_sample_succeeded)
-        AND NOT EXISTS(SELECT 1 FROM pdm_stats.gaps g WHERE g.node_id=s.node_id
-          AND (g.user_id IS NULL OR g.user_id=p_user) AND g.start_at<p_end AND g.end_at>=effective_start)
-        AND NOT EXISTS(SELECT 1 FROM pdm_stats.expected ex JOIN pdm_stats.samples sm ON sm.id=ex.sample_id
-          WHERE ex.node_id=s.node_id AND ex.user_id=p_user AND ex.remaining_bytes>0 AND NOT ex.invalidated
-            AND sm.observed_at>=effective_start AND sm.observed_at<p_end)
-        AND NOT EXISTS(SELECT 1 FROM pdm_stats.hours h WHERE h.node_id=s.node_id AND h.user_id=p_user
-          AND NOT raw_preserved AND h.hour_at<p_end AND h.hour_at+interval '1 hour'>p_start
-          AND NOT (h.hour_at>=p_start AND h.hour_at+interval '1 hour'<=p_end))
-      ),false) AS complete, st.last_sample_at AS measured_until
-    FROM scope s LEFT JOIN pdm_stats.node_state st USING(node_id)
-  ), summary AS (
-    SELECT coalesce(bool_and(complete),false) AS complete, min(measured_until) AS measured_until FROM coverage
-  )
-  SELECT jsonb_build_object('schema_version',1,'user_id',p_user,'start',p_start,'end',p_end,
-    'observed_at',observed,'measured_until',(SELECT measured_until FROM summary),
-    'precision','Panel-accounted bytes at database observation time; normal sample lag is explicit',
-    'nodes',coalesce((SELECT jsonb_agg(jsonb_build_object('node_uuid',node_uuid,'bytes',bytes::text)
-      ORDER BY node_uuid) FROM amounts),'[]'::jsonb),
-    'covered_node_uuids',coalesce((SELECT jsonb_agg(node_uuid ORDER BY node_uuid) FROM coverage WHERE complete),'[]'::jsonb),
-    'complete',(SELECT complete FROM summary),'unknown_bytes','0','unknown_bytes_are_quantified',(SELECT complete FROM summary),
-    'known_bytes',coalesce((SELECT sum(bytes) FROM amounts),0)::text,
-    'total_bytes',CASE WHEN (SELECT complete FROM summary) THEN
-      coalesce((SELECT sum(bytes) FROM amounts),0)::text ELSE NULL END,
-    'coverage',coalesce((SELECT jsonb_agg(jsonb_build_object('node_uuid',node_uuid,'complete',complete,
-      'measured_until',measured_until) ORDER BY node_uuid) FROM coverage),'[]'::jsonb)) INTO result;
-  RETURN result;
-END $$;
-REVOKE ALL ON SCHEMA pdm_stats FROM PUBLIC;
-REVOKE ALL ON ALL FUNCTIONS IN SCHEMA pdm_stats FROM PUBLIC;
-COMMIT;
-
-RW_STATS_PAYLOAD
-}
-rw_stats_hook() {
-cat <<'RW_STATS_PAYLOAD'
-'use strict';
-// Observe the panel's existing getUsersStats call. No additional Xray query/reset occurs.
-const { AsyncLocalStorage } = require('node:async_hooks');
-const { PrismaClient } = require('/opt/app/node_modules/@prisma/client');
-const scope = new AsyncLocalStorage();
-const instrumented = Symbol.for('pdm.stats.getUsersStats.instrumented.v1');
-let database;
-
-function db() {
-  if (!database) {
-    const url = new URL(process.env.DATABASE_URL);
-    url.searchParams.set('connection_limit', '1');
-    url.searchParams.set('pool_timeout', '1');
-    url.searchParams.set('connect_timeout', '2');
-    url.searchParams.set('socket_timeout', '2');
-    database = new PrismaClient({ datasources: { db: { url: url.toString() } }, log: [] });
-  }
-  return database;
-}
-
-async function witness(context, result) {
-  context.observed = true;
-  try {
-    let success = result?.isOk === true;
-    const expected = [];
-    if (success) {
-      if (!Array.isArray(result.response?.users)) throw new Error('invalid stats response');
-      for (const user of result.response.users) {
-        const total = user.downlink + user.uplink;
-        // This matches the pinned worker's accepted numeric usernames and byte threshold.
-        if (!/^[1-9][0-9]*$/.test(String(user.username))) continue;
-        if (!Number.isSafeInteger(total) || total < 0) throw new Error('unsafe counter');
-        if (BigInt(total) < BigInt(context.ignoreBelowBytes)) continue;
-        expected.push({ user_id: String(user.username), bytes: String(total) });
-      }
-    }
-    await db().$queryRawUnsafe(
-      'SELECT pdm_stats.observe_sample($1::bigint,$2::uuid,$3::boolean,$4::jsonb,$5::bigint)',
-      BigInt(context.nodeId), context.nodeUuid, success, JSON.stringify(expected),
-      BigInt(context.ignoreBelowBytes),
-    );
-  } catch (error) {
-    // Observation failure must not interrupt the panel after its counter read/reset.
-    console.error('PDM_STATS_OBSERVATION_FAILED', typeof error?.code === 'string' ? error.code : 'observer');
-  }
-}
-
-function instrument(instance) {
-  const axios = instance.axios;
-  if (axios[instrumented]) return;
-  const original = axios.getUsersStats;
-  if (typeof original !== 'function') throw new Error('unsupported worker');
-  axios.getUsersStats = async function (...args) {
-    const context = scope.getStore();
-    try {
-      const result = await original.apply(this, args);
-      if (context) await witness(context, result);
-      return result;
-    } catch (error) {
-      if (context) await witness(context, { isOk: false });
-      throw error;
-    }
-  };
-  axios[instrumented] = true;
-}
-
-exports.wrapProcess = function (instance, job, original) {
-  try {
-    instrument(instance);
-  } catch {
-    console.error('PDM_STATS_OBSERVATION_FAILED', 'instrumentation');
-    return original();
-  }
-  const context = {
-    nodeId: job.data.nodeId, nodeUuid: job.data.nodeUuid,
-    ignoreBelowBytes: instance.ignoreBelowBytes ?? 0n, observed: false,
-  };
-  return scope.run(context, async () => {
-    try {
-      return await original();
-    } finally {
-      if (!context.observed) await witness(context, { isOk: false });
-    }
-  });
-};
-
-RW_STATS_PAYLOAD
-}
-rw_stats_server() {
-cat <<'RW_STATS_PAYLOAD'
-'use strict';
-const http = require('node:http');
-const crypto = require('node:crypto');
-const fs = require('node:fs');
-const { PrismaClient } = require('/opt/app/node_modules/@prisma/client');
-const token = fs.readFileSync(process.env.PDM_STATS_TOKEN_FILE, 'utf8').trim();
-if (!/^[a-f0-9]{64}$/.test(token)) throw new Error('Invalid stats token file');
-const db = new PrismaClient({ datasources: { db: { url: process.env.DATABASE_URL } }, log: [] });
-const expected = Buffer.from('Bearer ' + token);
-
-function moment(value) {
-  const match = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.(\d{1,6}))?(?:Z|[+-]\d{2}:\d{2})$/.exec(value || '');
-  if (!match) return null;
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return null;
-  // Keep PostgreSQL's microsecond precision; JavaScript Date is used only for validation.
-  return { text: value, micros: BigInt(Math.floor(parsed.getTime() / 1000)) * 1000000n +
-           BigInt((match[1] || '').padEnd(6, '0') || '0') };
-}
-
-function send(response, code, value) {
-  response.writeHead(code, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
-  response.end(JSON.stringify(value));
-}
-
-const server = http.createServer(async (request, response) => {
-  const received = Buffer.from(request.headers.authorization || '');
-  if (received.length !== expected.length || !crypto.timingSafeEqual(received, expected)) {
-    send(response, 401, { error: 'unauthorized' }); return;
-  }
-  if (request.method !== 'GET') { send(response, 405, { error: 'method' }); return; }
-  try {
-    const url = new URL(request.url, 'http://stats.internal');
-    if (url.pathname === '/health') {
-      const result = await db.$queryRawUnsafe('SELECT pdm_stats.status() AS result');
-      send(response, 200, result[0].result); return;
-    }
-    const match = /^\/v1\/users\/([1-9][0-9]{0,17})\/usage$/.exec(url.pathname);
-    if (!match) { send(response, 404, { error: 'path' }); return; }
-    const start = moment(url.searchParams.get('start'));
-    const end = moment(url.searchParams.get('end'));
-    if (!start || !end || start.micros > end.micros || end.micros > BigInt(Date.now() + 5000) * 1000n) {
-      send(response, 400, { error: 'interval' }); return;
-    }
-    const result = await db.$queryRawUnsafe('SELECT pdm_stats.usage($1::bigint,$2::timestamptz,$3::timestamptz) AS result',
-                                           BigInt(match[1]), start.text, end.text);
-    send(response, 200, result[0].result);
-  } catch (error) {
-    console.error('PDM_STATS_API_ERROR', typeof error?.code === 'string' ? error.code : 'database');
-    send(response, 503, { error: 'unavailable' });
-  }
-});
-server.headersTimeout = 10000;
-server.requestTimeout = 10000;
-server.maxConnections = 32;
-server.listen(Number(process.env.PDM_STATS_PORT || 13100), '0.0.0.0');
-async function stop() { server.close(); await db.$disconnect(); }
-process.on('SIGTERM', stop);
-process.on('SIGINT', stop);
-
-RW_STATS_PAYLOAD
-}
-rw_stats_patcher() {
-cat <<'RW_STATS_PAYLOAD'
-'use strict';
-// Run inside the pinned official image, against its own extracted processor bundle.
-const fs = require('node:fs');
-const crypto = require('node:crypto');
-const original = fs.readFileSync(process.argv[2]);
-const expected = '3c746587906be64386f673bb313a5813e4cab8283de1c847bf97187813fdb62e';
-if (crypto.createHash('sha256').update(original).digest('hex') !== expected) {
-  throw new Error('Unsupported Remnawave processor bundle; no patch applied');
-}
-const source = original.toString('utf8');
-const classStart = source.indexOf('function RecordUserUsageQueueProcessor(');
-const methodStart = source.indexOf('{key:"process",value:function process(e){', classStart);
-const methodEnd = source.indexOf('}},{key:"handleOk"', methodStart);
-if (classStart < 0 || methodStart < classStart || methodEnd < methodStart) throw new Error('Worker shape changed');
-const prefix = '{key:"process",value:function process(e){';
-const body = source.slice(methodStart + prefix.length, methodEnd);
-if (!body.startsWith('return ') || !body.endsWith('.call(this)')) throw new Error('Worker body changed');
-const expression = body.slice('return '.length);
-const replacement = prefix + 'return require("/opt/pdm-stats/panel-hook.cjs").wrapProcess(this,e,()=>(' + expression + '))';
-const patched = source.slice(0, methodStart) + replacement + source.slice(methodEnd);
-// Compile syntax without executing a server, accessing credentials or contacting Xray.
-new (require('node:vm').Script)(patched);
-fs.writeFileSync(process.argv[3], patched, { mode: 0o600 });
-console.log('Patched one pinned worker process method; base SHA256 verified.');
-
-RW_STATS_PAYLOAD
-}
-rw_confluence() {
-cat <<'RW_CONFLUENCE'
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Log in to Confluence</title>
-    <style>
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-            background-color: #f4f5f7;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            height: 100vh;
-            margin: 0;
-        }
-
-        .login-container {
-            background-color: white;
-            padding: 40px;
-            border-radius: 8px;
-            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12), 0 1px 2px rgba(0, 0, 0, 0.24);
-            width: 350px;
-            text-align: center;
-        }
-
-        .logo {
-            margin-bottom: 20px;
-        }
-
-        .logo img {
-            width: 120px;
-        }
-
-        h2 {
-            margin-bottom: 20px;
-            font-size: 24px;
-            color: #0052cc;
-        }
-
-        input[type="text"], input[type="password"] {
-            width: 100%;
-            padding: 10px;
-            margin: 10px 0;
-            border: 1px solid #dfe1e6;
-            border-radius: 4px;
-            box-sizing: border-box;
-            font-size: 16px;
-        }
-
-        .error {
-            border-color: red;
-        }
-
-        .error-message {
-            color: red;
-            font-size: 14px;
-            display: none;
-            margin-top: 10px;
-        }
-
-        button {
-            width: 100%;
-            padding: 10px;
-            background-color: #0052cc;
-            color: white;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 16px;
-            margin-top: 20px;
-        }
-
-        button:hover {
-            background-color: #0747a6;
-        }
-
-        .help-links {
-            margin-top: 20px;
-            font-size: 14px;
-        }
-
-        .help-links a {
-            color: #0052cc;
-            text-decoration: none;
-        }
-
-        .help-links a:hover {
-            text-decoration: underline;
-        }
-         /* Modal dialog styles */
-        .modal {
-            display: none;
-            position: fixed;
-            z-index: 1;
-            left: 0;
-            top: 0;
-            width: 100%;
-            height: 100%;
-            overflow: auto;
-            background-color: rgba(0,0,0,0.4);
-            padding-top: 60px;
-        }
-
-        .modal-content {
-            background-color: white;
-            margin: 5% auto;
-            padding: 20px;
-            border: 1px solid #888;
-            width: 80%;
-            max-width: 400px;
-            border-radius: 8px;
-            text-align: center;
-        }
-
-        .close {
-            color: #aaa;
-            float: right;
-            font-size: 28px;
-            font-weight: bold;
-            cursor: pointer;
-        }
-
-        .close:hover,
-        .close:focus {
-            color: black;
-            text-decoration: none;
-            cursor: pointer;
-        }
-    </style>
-</head>
-<body>
-
-<div class="login-container">
-    <div class="logo">
-        <svg width="120" height="120" fill="#0052cc" role="img" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><title>Confluence</title><path d="M.87 18.257c-.248.382-.53.875-.763 1.245a.764.764 0 0 0 .255 1.04l4.965 3.054a.764.764 0 0 0 1.058-.26c.199-.332.454-.763.733-1.221 1.967-3.247 3.945-2.853 7.508-1.146l4.957 2.337a.764.764 0 0 0 1.028-.382l2.364-5.346a.764.764 0 0 0-.382-1 599.851 599.851 0 0 1-4.965-2.361C10.911 10.97 5.224 11.185.87 18.257zM23.131 5.743c.249-.405.531-.875.764-1.25a.764.764 0 0 0-.256-1.034L18.675.404a.764.764 0 0 0-1.058.26c-.195.335-.451.763-.734 1.225-1.966 3.246-3.945 2.85-7.508 1.146L4.437.694a.764.764 0 0 0-1.027.382L1.046 6.422a.764.764 0 0 0 .382 1c1.039.49 3.105 1.467 4.965 2.361 6.698 3.246 12.392 3.029 16.738-4.04z"/></svg>
-    </div>
-    <h2 id="login-title">Log in to Confluence</h2>
-    <form id="login-form" action="#" autocomplete="off">
-        <input type="text" id="username" placeholder="Email address">
-        <input type="password" id="password" placeholder="Enter password">
-        <button type="submit" id="login-button">Log in</button>
-    </form>
-    <div id="error-message" class="error-message">Incorrect username or password.</div>
-    <div class="help-links">
-        <a href="#" id="forgot-link">Cannot log in?</a> • <a href="#" id="create-link">Create an account</a>
-    </div>
-</div>
-
-<div id="myModal" class="modal">
-    <div class="modal-content">
-        <span class="close">&times;</span>
-        <p id="modal-text">To create an account, contact your administrator.</p>
-    </div>
-</div>
-
-<script>
-    document.getElementById('create-link').dataset.modalText = 'To create an account, contact your administrator.';
-    document.getElementById('forgot-link').dataset.modalText = 'To recover access, contact your administrator.';
-
-    var modal = document.getElementById("myModal");
-
-    var span = document.getElementsByClassName("close")[0];
-
-    function openModal(text) {
-        document.getElementById('modal-text').innerText = text;
-        modal.style.display = "block";
-    }
-
-    document.getElementById("create-link").onclick = function(event) {
-        event.preventDefault();
-        openModal(this.dataset.modalText);
-    }
-
-    document.getElementById("forgot-link").onclick = function(event) {
-        event.preventDefault();
-        openModal(this.dataset.modalText);
-    }
-
-    span.onclick = function() {
-        modal.style.display = "none";
-    }
-
-    window.onclick = function(event) {
-        if (event.target == modal) {
-            modal.style.display = "none";
-        }
-    }
-
-    document.getElementById('login-form').onsubmit = function(event) {
-        event.preventDefault();
-        var username = document.getElementById('username');
-        var password = document.getElementById('password');
-        var errorMessage = document.getElementById('error-message');
-
-        username.classList.remove('error');
-        password.classList.remove('error');
-        errorMessage.style.display = 'none';
-
-        var hasError = false;
-        if (username.value.trim() === '') {
-            username.classList.add('error');
-            hasError = true;
-        }
-        if (password.value.trim() === '') {
-            password.classList.add('error');
-            hasError = true;
-        }
-
-        if (hasError) {
-            return;
-        }
-
-        errorMessage.style.display = 'block';
-    };
-
-    window.onclick = function(event) {
-        if (event.target == modal) {
-            modal.style.display = "none";
-        }
-    }
-</script>
-
-</body>
-</html>
-
-RW_CONFLUENCE
-}
 # shellcheck shell=bash
 rw_die() { printf 'Error: %s\n' "$*" >&2; exit 1; }
 rw_info() { printf '%s\n' "$*" >&2; }
@@ -987,7 +99,7 @@ rw_safe_parents() {
     parent=$(dirname -- "$1")
     while [[ $parent != / && $parent != . ]]; do
         [[ ! -L $parent ]] || rw_die 'A parent directory is a symbolic link.'
-        parent=$(dirname -- "$parent")
+        if [[ $parent == */* ]]; then parent=${parent%/*}; [[ -n $parent ]] || parent=/; else parent=.; fi
     done
 }
 rw_atomic() {
@@ -1043,7 +155,6 @@ rw_resume_writes() {
     rm -f -- "$RW_OUT/.rw-write.json"
 }
 rw_managed_remove() { rw_write_begin "$RW_OUT/$1"; rw_resume_writes; }
-rw_jwrite() { local target=$1; shift; jq "$@" | rw_atomic "$target"; }
 rw_lock() {
     [[ ${RW_LOCK_DIR:-} != "$RW_OUT" ]] || return 0
     rw_safe_parents "$RW_OUT/private/.lock-check"
@@ -1079,10 +190,15 @@ rw_deps() {
     for cmd in curl jq openssl dig ss nft flock ssh-keygen; do command -v "$cmd" >/dev/null 2>&1 || missing=1; done
     if (( missing )); then
         rw_root
-        rw_info 'Installing dependencies: curl jq openssl dnsutils iproute2 nftables util-linux ca-certificates.'
-        apt-get update -q
+        rw_info 'Installing dependencies: curl jq openssl dnsutils iproute2 nftables util-linux ca-certificates openssh-client.'
+        rw_apt_update
         DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends curl jq openssl dnsutils iproute2 nftables util-linux ca-certificates openssh-client
     fi
+}
+rw_apt_update() {
+    [[ ${RW_APT_UPDATED:-0} != 1 ]] || return 0
+    apt-get update -q || rw_die 'Cannot refresh APT package indexes.'
+    RW_APT_UPDATED=1
 }
 rw_os() {
     # shellcheck disable=SC1091
@@ -1090,14 +206,17 @@ rw_os() {
     [[ $ID == debian && $VERSION_ID == 13 && $(uname -m) == x86_64 ]] || rw_die 'Supported server: Debian 13 amd64.'
 }
 rw_docker_install() {
+    RW_DOCKER_INSTALLED=0
     if ! command -v docker >/dev/null 2>&1; then
+        RW_DOCKER_INSTALLED=1
         rw_info 'Installing Docker Engine and Compose from the official Docker APT repository.'
         apt-get install -y --no-install-recommends ca-certificates curl
         install -m 0755 -d /etc/apt/keyrings
         curl -fsS --proto '=https' --tlsv1.2 https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc
         chmod a+r /etc/apt/keyrings/docker.asc
         printf '%s\n' 'Types: deb' 'URIs: https://download.docker.com/linux/debian' 'Suites: trixie' 'Components: stable' 'Architectures: amd64' 'Signed-By: /etc/apt/keyrings/docker.asc' > /etc/apt/sources.list.d/docker.sources
-        apt-get update -q
+        # Adding a repository invalidates the package index from rw_deps.
+        RW_APT_UPDATED=0; rw_apt_update
         DEBIAN_FRONTEND=noninteractive apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
         systemctl enable --now docker.service
     fi
@@ -1116,7 +235,7 @@ rw_config_load() {
     [[ $RW_OUT =~ ^/[A-Za-z0-9_./-]+$ ]] || rw_die 'Installation directory must be an absolute path without spaces or control characters.'
     [[ $RW_OUT != / && $RW_OUT != /opt && $RW_OUT != /etc && $RW_OUT != /tmp && $RW_OUT != /root && $RW_OUT != /home ]] || rw_die 'Specify a dedicated installation directory.'
     local parent=$RW_OUT
-    while [[ $parent != / ]]; do [[ ! -L $parent ]] || rw_die 'The installation directory contains a symbolic link.'; parent=$(dirname -- "$parent"); done
+    while [[ $parent != / ]]; do [[ ! -L $parent ]] || rw_die 'The installation directory contains a symbolic link.'; parent=${parent%/*}; [[ -n $parent ]] || parent=/; done
     RW_PROJECT=pdm-rw-$RW_ENV
     RW_OWNER=$(printf '%s' "$RW_ENV:$RW_OUT" | sha256sum | cut -d' ' -f1)
     RW_SUBNET=$(jq -r '.docker_subnet' "$RW_CFG"); RW_NET_PREFIX=${RW_SUBNET%.0/24}; RW_PANEL_ADDRESS=$RW_NET_PREFIX.1
@@ -1134,6 +253,7 @@ rw_memory_limits() {
         else {rw_db:512,rw_valkey:128,rw_panel:768,rw_subscription:128,rw_caddy:128,rw_node:256} end' "$RW_CFG"
 }
 rw_compose() { docker compose --project-name "$RW_PROJECT" -f "$RW_OUT/compose.json" "$@"; }
+rw_pull() { timeout --foreground 900 docker compose --project-name "$RW_PROJECT" -f "$RW_OUT/compose.json" --profile public --profile node pull --policy missing "$@"; }
 rw_manifest_set() { local filter=$1; shift; jq "$@" "$filter" "$RW_OUT/manifest.json" | rw_atomic "$RW_OUT/manifest.json"; }
 rw_manifest() {
     local status=$1
@@ -1153,203 +273,6 @@ rw_install_ctl() {
         printf '%s\n' 'rw_main ctl "$@"'
     } | rw_atomic "$RW_OUT/rwctl"
     chmod 700 "$RW_OUT/rwctl"
-}
-# shellcheck shell=bash
-rw_address_jq() { rw_config_filter | sed '/^\.$/,$d'; }
-rw_address_list() {
-    { rw_address_jq; printf '\n[inputs|split(",")[]|gsub("^ +| +$";"")]|require(length>0 and all(ip);"Enter valid IPv4/IPv6 addresses")|map(ipnorm)|unique\n'; } > "$RW_TMP/addresses.jq"
-    jq -Ren -f "$RW_TMP/addresses.jq"
-}
-rw_domain_check() {
-    { rw_address_jq; printf '\n$domain|domain\n'; } > "$RW_TMP/domain.jq"
-    jq -ne --arg domain "$1" -f "$RW_TMP/domain.jq" >/dev/null
-}
-rw_dns_addresses() {
-    local domain=$1 family
-    rw_domain_check "$domain" || return 1
-    : > "$RW_TMP/address-dns.txt"
-    for family in A AAAA; do
-        dig +time=2 +tries=1 +noall +answer +comments "$domain" "$family" > "$RW_TMP/address-answer.txt" || return 1
-        grep -q 'status: NOERROR' "$RW_TMP/address-answer.txt" || return 1
-        awk '$4=="A" || $4=="AAAA" {print $5}' "$RW_TMP/address-answer.txt" >> "$RW_TMP/address-dns.txt"
-    done
-    { rw_address_jq; printf '\n[inputs|select(length>0)]|require(all(ip);"Invalid DNS address")|map(ipnorm)|unique\n'; } > "$RW_TMP/address-dns.jq"
-    jq -Rn -f "$RW_TMP/address-dns.jq" < "$RW_TMP/address-dns.txt"
-}
-rw_detect_addresses() {
-    local family address url
-    : > "$RW_TMP/detected-addresses.txt"
-    ip -j address show scope global > "$RW_TMP/interfaces.json" 2>/dev/null || printf '[]\n' > "$RW_TMP/interfaces.json"
-    jq -r '.[]|select(.ifname|test("^(lo|docker|br-|veth|virbr|pdm-)" )|not)|.addr_info[]?|select(.scope=="global" and .preferred_life_time!=0)|.local' "$RW_TMP/interfaces.json" >> "$RW_TMP/detected-addresses.txt"
-    for family in 4 6; do
-        if [[ $family == 4 ]]; then url=https://api.ipify.org; else url=https://api6.ipify.org; fi
-        if address=$(curl -"$family" -fsS --proto '=https' --connect-timeout 2 --max-time 4 --max-filesize 128 "$url" 2>/dev/null); then
-            printf '%s\n' "$address" >> "$RW_TMP/detected-addresses.txt"
-        fi
-    done
-    { rw_address_jq; cat <<'RW_PUBLIC_JQ'
-[inputs|select(ip)|ipnorm|select(
- if contains(":") then test("^[23]")
- else split(".")|map(tonumber)|
-   .[0]>0 and .[0]<224 and .[0]!=10 and .[0]!=127 and
-   (.[0]!=172 or .[1]<16 or .[1]>31) and
-   (.[0]!=192 or .[1]!=168) and (.[0]!=169 or .[1]!=254) and
-   (.[0]!=100 or .[1]<64 or .[1]>127)
- end)]|unique
-RW_PUBLIC_JQ
-    } > "$RW_TMP/public-addresses.jq"
-    jq -Rn -f "$RW_TMP/public-addresses.jq" < "$RW_TMP/detected-addresses.txt"
-}
-rw_confirm_addresses() {
-    local label=$1 candidate=$2 answer input
-    if jq -e 'length>0' "$candidate" >/dev/null; then
-        printf '%s: %s\n' "$label" "$(jq -r 'join(", ")' "$candidate")" >&2
-        read -r -p 'Use these addresses? [Y/n]: ' answer || rw_die 'Address confirmation was interrupted.'
-        case ${answer:-y} in y|Y|yes|YES) cat "$candidate"; return;; n|N|no|NO) :;; *) rw_info 'Enter y or n. Switching to manual address entry.';; esac
-    fi
-    while :; do
-        read -r -p "$label (comma-separated IPv4/IPv6): " input || rw_die 'Address input was interrupted.'
-        if printf '%s\n' "$input" | rw_address_list > "$RW_TMP/manual-addresses.json" 2>/dev/null; then cat "$RW_TMP/manual-addresses.json"; return; fi
-        rw_info 'Invalid address list. IPv6 is optional; enter IPv4 only if needed.'
-    done
-}
-rw_choose_public_addresses() {
-    local domain common='' same=1 detected=$RW_TMP/public-detected.json dns=$RW_TMP/public-dns.json
-    rw_detect_addresses > "$detected"
-    rw_info "Detected public server addresses: $(jq -r 'if length>0 then join(", ") else "unavailable" end' "$detected")"
-    for domain in "$@"; do
-        if rw_dns_addresses "$domain" > "$dns"; then
-            printf 'DNS %s: %s\n' "$domain" "$(jq -r 'if length>0 then join(", ") else "no A/AAAA records" end' "$dns")" >&2
-            if [[ -z $common ]]; then common=$(jq -c . "$dns"); elif [[ $common != "$(jq -c . "$dns")" ]]; then same=0; fi
-        else rw_info "DNS $domain: lookup failed."; same=0; fi
-    done
-    if [[ $same == 1 && -n $common ]] && jq -e --argjson dns "$common" '$dns|length>0' "$detected" >/dev/null && jq -e --argjson dns "$common" '. as $server|all($dns[]; . as $ip|$server|index($ip)!=null)' "$detected" >/dev/null; then
-        printf '%s\n' "$common" > "$RW_TMP/public-proposed.json"
-    else
-        cp "$detected" "$RW_TMP/public-proposed.json"
-        rw_info 'DNS and detected addresses differ or are unverified. DNS must match the confirmed list before installation.'
-    fi
-    rw_confirm_addresses 'Public server addresses' "$RW_TMP/public-proposed.json"
-}
-rw_choose_panel_addresses() {
-    local input
-    rw_info 'Node management must allow the panel server source IPs. A proxied/CDN domain does not identify those IPs.'
-    while :; do
-        read -r -p 'Panel server domain or comma-separated source IPs: ' input || rw_die 'Panel address input was interrupted.'
-        if printf '%s\n' "$input" | rw_address_list > "$RW_TMP/panel-proposed.json" 2>/dev/null; then :
-        elif rw_dns_addresses "$input" > "$RW_TMP/panel-proposed.json" && jq -e 'length>0' "$RW_TMP/panel-proposed.json" >/dev/null; then :
-        else rw_info 'No valid panel addresses found. Enter the actual panel server source IPs.'; continue; fi
-        rw_confirm_addresses 'Allowed panel source addresses' "$RW_TMP/panel-proposed.json"
-        return
-    done
-}
-# shellcheck shell=bash
-rw_site_default() {
-    # Rendering or recovery must preserve an existing customized cover.
-    [[ ! -f $RW_OUT/site/index.html ]] || return 0
-    rw_confluence | rw_atomic "$RW_OUT/site/index.html"
-    rw_manifest_set '.cover={template:"confluence"}'
-}
-rw_site_set() {
-    rw_root; rw_owned; rw_lock; rw_resume_writes; rw_verify_files
-    [[ $RW_ROLE != panel ]] || rw_die 'This installation has no node cover site.'
-    [[ -z ${RW_SITE_FILE:-} || -z ${RW_SITE_TEMPLATE:-} ]] || rw_die 'Choose --template or --site-file, not both.'
-    if (( ${RW_DRY_RUN:-0} )); then
-        jq -n --arg template "${RW_SITE_TEMPLATE:-confluence}" --arg file "${RW_SITE_FILE:-}" '{template:$template,source_file:$file,read_only:true}'
-        return
-    fi
-    if [[ -n ${RW_SITE_FILE:-} ]]; then
-        [[ -f $RW_SITE_FILE && ! -L $RW_SITE_FILE && $(stat -c %s "$RW_SITE_FILE") -le 2097152 ]] || rw_die 'Provide a regular HTML file of at most 2 MiB.'
-        cat "$RW_SITE_FILE" | rw_atomic "$RW_OUT/site/index.html"
-        rw_manifest_set '.cover={template:"custom"}'
-    else
-        case ${RW_SITE_TEMPLATE:-confluence} in
-            confluence) rw_confluence | rw_atomic "$RW_OUT/site/index.html";;
-            simple) printf '<!doctype html><html lang="en"><meta charset="utf-8"><title>Service</title><h1>Service online</h1></html>\n' | rw_atomic "$RW_OUT/site/index.html";;
-            *) rw_die 'Cover template must be confluence or simple.';;
-        esac
-        rw_manifest_set '.cover={template:$template}' --arg template "${RW_SITE_TEMPLATE:-confluence}"
-    fi
-    rw_track_files
-    rw_info 'Cover page updated. Domains, Reality keys and transports were preserved.'
-}
-# shellcheck shell=bash
-rw_summary_url() {
-    local domain=$1 port=$2 path=${3:-}
-    printf 'https://%s' "$domain"
-    [[ $port == 443 ]] || printf ':%s' "$port"
-    printf '%s' "$path"
-}
-rw_summary_render() {
-    local show_secrets=${1:-0} status domain panel_url sub_url cover_url prepared=0 host
-    status=$(jq -r '.status' "$RW_OUT/manifest.json")
-    [[ $status != node-prepared-awaiting-attachment ]] || prepared=1
-    printf '\n=== Remnawave installation summary ===\n'
-    printf 'Installation: %s\nRole: %s\nStatus: %s\nDirectory: %s\n' "$RW_ENV" "$RW_ROLE" "$status" "$RW_OUT"
-    if [[ $RW_ROLE != node ]]; then
-        panel_url=$(rw_summary_url "$(rw_cfg '.domains.panel')" "$(rw_port https)")
-        sub_url=$(rw_summary_url "$(rw_cfg '.domains.subscription')" "$(rw_subscription_port)")
-        printf '\nPanel URL: %s/\nMFA login URL: %s/r\nSubscription base URL: %s/\n' "$panel_url" "$panel_url" "$sub_url"
-        printf 'Remnawave username: %s\nCaddy Auth username: %s\n' "$(jq -r '.username' "$RW_OUT/private/admin.json")" "$(rw_cfg '.admin.username')"
-        if (( show_secrets )); then
-            printf 'Saved Remnawave password: %s\nSaved Caddy Auth password: %s\n' "$(jq -r '.password' "$RW_OUT/private/admin.json")" "$(jq -r '.auth_password' "$RW_OUT/private/secrets.json")"
-        else
-            printf 'Passwords are hidden in this summary. To display them in your terminal:\n  bash %q info --show-secrets\n' "$RW_OUT/rwctl"
-        fi
-        printf 'Credentials: %s/private/admin.json and %s/private/secrets.json\n' "$RW_OUT" "$RW_OUT"
-        printf 'Enroll MFA at the login URL, then verify a fresh browser login.\n'
-        printf 'Personal subscription links are issued per user in the panel.\n'
-    fi
-    if [[ $RW_ROLE != panel ]]; then
-        domain=$(rw_cfg '.domains.node')
-        cover_url=$(rw_summary_url "$domain" "$(rw_port reality)")
-        printf '\nNode domain / SNI: %s\n' "$domain"
-        if (( prepared )); then
-            printf 'Node is prepared; management, cover and transports start after attachment.\nPlanned cover URL: %s/\n' "$cover_url"
-        else printf 'Cover URL: %s/\n' "$cover_url"; fi
-        printf 'VLESS TCP Reality: %s:%s\nVLESS XHTTP Reality: %s:%s\n' "$domain" "$(rw_port reality)" "$domain" "$(rw_port xhttp)"
-        printf 'Reality public key: %s\nReality Short ID: %s\nXHTTP path: %s\nClient fingerprint: chrome\n' \
-            "$(jq -r '.reality_public' "$RW_OUT/private/secrets.json")" "$(jq -r '.short_id' "$RW_OUT/private/secrets.json")" "$(jq -r '.xhttp_path' "$RW_OUT/private/secrets.json")"
-        printf 'Node management port: TCP %s (panel -> node)\n' "$(rw_port node_api)"
-        if [[ $RW_ROLE == node ]]; then
-            printf 'Management address: %s\nAllowed panel source IPs: %s\n' "$(rw_cfg '.management_address')" "$(jq -r '.panel_addresses|join(", ")' "$RW_CFG")"
-        else printf 'Management is restricted to this installation\x27s panel container and loopback.\n'; fi
-        printf 'Native management key file: %s/private/node.env\n' "$RW_OUT"
-        if (( prepared )); then
-            host=$(rw_cfg '.management_address')
-            # scp requires brackets around an IPv6 address; ssh uses USER@ADDRESS.
-            [[ $host != *:* ]] || host=[$host]
-            printf '\nOn the panel server, copy this public node configuration:\n  scp %q %q\n' "root@$host:$RW_OUT/config.json" "/root/$RW_ENV.json"
-            printf 'Then attach from the panel server (replace PANEL_INSTALLATION):\n  bash /opt/pdm-remnawave/PANEL_INSTALLATION/rwctl node attach --ssh %q --node-config %q\n' "root@$(rw_cfg '.management_address')" "/root/$RW_ENV.json"
-            printf 'SSH must already trust this host and permit key-based login; a sudo admin may replace root.\n'
-        fi
-    fi
-    printf '\nConfiguration: %s/config.json\nInventory: %s/inventory.json\n' "$RW_OUT" "$RW_OUT"
-    if jq -e '.security!=null' "$RW_OUT/manifest.json" >/dev/null; then
-        printf 'Root SSH key: %s\nUFW: %s\n' "$(jq -r '.security.root_key // "unchanged"' "$RW_OUT/manifest.json")" "$(jq -r '.security.ufw // "unchanged"' "$RW_OUT/manifest.json")"
-        if [[ $(jq -r '.security.ufw // empty' "$RW_OUT/manifest.json") == awaiting-fresh-ssh ]]; then
-            printf 'Reconnect SSH in a new terminal and confirm within 5 minutes:\n  bash %q security confirm\n' "$RW_OUT/rwctl"
-        fi
-    fi
-    if [[ -f $RW_OUT/private/install-info.txt ]]; then printf 'Full access card (root-only): %s/private/install-info.txt\n' "$RW_OUT"; fi
-    printf 'Show this summary: bash %q info\n' "$RW_OUT/rwctl"
-    if (( ! prepared )); then printf 'Health check: bash %q doctor\n' "$RW_OUT/rwctl"; fi
-    printf 'Backup: bash %q backup --archive %q\n' "$RW_OUT/rwctl" "/var/backups/pdm-remnawave/$RW_ENV-manual.tgz"
-    printf 'Keep a private backup off the VPS.\n'
-}
-rw_install_summary() {
-    rw_summary_render 1 | rw_atomic "$RW_OUT/private/install-info.txt"
-    # A normal SSH installation shows the owner credentials. CI and redirected
-    # logs receive public connection details and credential file paths only.
-    if [[ -t 1 ]]; then rw_summary_render 1; else rw_summary_render 0; fi
-}
-rw_show_summary() {
-    rw_owned; rw_verify_files
-    if (( ${RW_SHOW_SECRETS:-0} )); then
-        rw_root
-        [[ -t 1 ]] || rw_die '--show-secrets requires an interactive terminal.'
-    fi
-    rw_summary_render "${RW_SHOW_SECRETS:-0}"
 }
 # shellcheck shell=bash
 rw_root_key_paths() {
@@ -1475,7 +398,7 @@ rw_security_apply() {
         rw_die 'A host firewall change is already awaiting a fresh SSH connection.'
     fi
     if ! command -v ufw >/dev/null 2>&1; then
-        apt-get update -q
+        rw_apt_update
         DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ufw
     fi
     [[ -f $RW_OUT/private/security-preserved-ports.json ]] || rw_security_capture
@@ -1589,125 +512,30 @@ rw_security_status() {
     jq '{root_key:.security.root_key,ufw:.security.ufw}' "$RW_OUT/manifest.json"
     if command -v ufw >/dev/null 2>&1; then ufw status verbose; fi
 }
-# shellcheck shell=bash
-rw_secrets() {
-    local file=$RW_OUT/private/secrets.json key
-    if [[ -f $file ]]; then jq -e '.app_secret and .admin_password and .reality_private' "$file" >/dev/null || rw_die 'The secrets file is damaged; keys will not be regenerated.'; return; fi
-    if [[ -f $RW_OUT/manifest.json ]]; then
-        [[ $(jq -r '.secrets_ready // false' "$RW_OUT/manifest.json") == false ]] || rw_die 'Secrets are missing; stopped without regenerating keys.'
-    fi
-    for key in app_secret postgres_password metrics_password webhook_secret auth_password; do openssl rand -hex 32 > "$RW_TMP/$key"; done
-    printf 'Aa1%s\n' "$(openssl rand -hex 32)" > "$RW_TMP/admin_password"
-    openssl genpkey -algorithm X25519 -outform DER -out "$RW_TMP/key.der"
-    openssl pkey -inform DER -in "$RW_TMP/key.der" -pubout -outform DER -out "$RW_TMP/pub.der"
-    [[ $(wc -c < "$RW_TMP/key.der") == 48 && $(wc -c < "$RW_TMP/pub.der") == 44 ]] || rw_die 'Invalid X25519 DER format.'
-    tail -c 32 "$RW_TMP/key.der" | openssl base64 -A | tr '+/' '-_' | tr -d '=' > "$RW_TMP/reality_private"
-    tail -c 32 "$RW_TMP/pub.der" | openssl base64 -A | tr '+/' '-_' | tr -d '=' > "$RW_TMP/reality_public"
-    openssl rand -hex 8 > "$RW_TMP/short_id"; printf '/%s\n' "$(openssl rand -hex 16)" > "$RW_TMP/xhttp_path"
-    jq -n --rawfile app "$RW_TMP/app_secret" --rawfile pg "$RW_TMP/postgres_password" --rawfile met "$RW_TMP/metrics_password" \
-      --rawfile wh "$RW_TMP/webhook_secret" --rawfile auth "$RW_TMP/auth_password" --rawfile admin "$RW_TMP/admin_password" \
-      --rawfile priv "$RW_TMP/reality_private" --rawfile pub "$RW_TMP/reality_public" --rawfile sid "$RW_TMP/short_id" --rawfile path "$RW_TMP/xhttp_path" \
-      '{app_secret:$app,postgres_password:$pg,metrics_password:$met,webhook_secret:$wh,auth_password:$auth,admin_password:$admin,reality_private:$priv,reality_public:$pub,short_id:$sid,xhttp_path:$path}|map_values(rtrimstr("\n"))' | rw_atomic "$file"
-    if [[ -f $RW_OUT/manifest.json ]]; then rw_manifest_set '.secrets_ready=true'; fi
-}
-rw_render_compose() {
-    local target=${1:-$RW_OUT/compose.json} versions=${2:-$RW_OUT/versions.lock.json}
-    rw_memory_limits > "$RW_TMP/limits.json"
-    jq -n --slurpfile c "$RW_CFG" --slurpfile v "$versions" --slurpfile limits "$RW_TMP/limits.json" --arg owner "$RW_OWNER" --arg project "$RW_PROJECT" --arg prefix "$RW_NET_PREFIX" '
-      $c[0] as $c | $v[0].components as $v | $c.ports as $p |
-      def service($image;$name): ($limits[0][$name]*1048576) as $memory |
-        {image:$image,restart:"unless-stopped",mem_limit:$memory,cpus:(if $c.resources.profile=="compact-test" then 0.5 else 0.75 end),labels:{"io.pdm.remnawave.installation":$owner},logging:{driver:"json-file",options:{"max-size":"10m","max-file":"3"}}} |
-        if $c.resources.profile=="compact-test" then .memswap_limit=$memory else . end;
-      def env($path): [{path:$path,format:"raw"}];
-      def health($test): {test:$test,interval:"5s",timeout:"3s",retries:20,start_period:"60s"};
-      {name:$project,services:{},volumes:{caddy_data:{},caddy_config:{}},networks:{default:{labels:{"io.pdm.remnawave.installation":$owner},ipam:{config:[{subnet:$c.docker_subnet,gateway:($prefix+".1")}]}}}} |
-      if $c.role != "node" then
-        .services.rw_db=(service($v.postgres.image;"rw_db")+{shm_size:"128m",env_file:env("private/postgres.env"),volumes:["database:/var/lib/postgresql"],healthcheck:health(["CMD-SHELL","pg_isready -U postgres -d remnawave"])}) |
-        (if $c.resources.profile=="compact-test" then .services.rw_db.command=["postgres","-c","shared_buffers=32MB","-c","max_connections=20","-c","work_mem=2MB","-c","maintenance_work_mem=16MB"] else . end) |
-        .services.rw_valkey=(service($v.valkey.image;"rw_valkey")+{volumes:["valkey_socket:/var/run/valkey"],command:["valkey-server","--save","","--appendonly","no","--maxmemory",(if $c.resources.profile=="compact-test" then "16mb" else "96mb" end),"--maxmemory-policy","noeviction","--loglevel","warning","--unixsocket","/var/run/valkey/valkey.sock","--unixsocketperm","777","--port","0"],healthcheck:health(["CMD","valkey-cli","-s","/var/run/valkey/valkey.sock","ping"])}) |
-        .services.rw_panel=(service($v.panel.image;"rw_panel")+{env_file:env("private/panel.env"),ports:[("127.0.0.1:"+($p.panel_api|tostring)+":3000"),("127.0.0.1:"+($p.metrics|tostring)+":3001")],networks:{default:{ipv4_address:($prefix+".10")}},volumes:["valkey_socket:/var/run/valkey"],depends_on:{rw_db:{condition:"service_healthy"},rw_valkey:{condition:"service_healthy"}},healthcheck:health(["CMD","curl","-f","http://127.0.0.1:3001/health"])}) |
-        (if $c.resources.profile=="compact-test" then .services.rw_panel.environment={NODE_OPTIONS:"--max-old-space-size=256"} else . end) |
-        .services.rw_subscription=(service($v.subscription.image;"rw_subscription")+{profiles:["public"],env_file:env("private/subscription.env"),ports:[("127.0.0.1:"+($p.subscription_api|tostring)+":3010")]}) |
-        .volumes.database={} | .volumes.valkey_socket={}
-      else . end |
-      .services.rw_caddy=(service($v.caddy_auth.image;"rw_caddy")+{profiles:["public"],network_mode:"host",env_file:env("private/caddy.env"),volumes:["./Caddyfile:/etc/caddy/Caddyfile:ro","caddy_data:/data","caddy_config:/config","./site:/srv:ro"]}) |
-      if $c.role != "panel" then .services.rw_node=(service($v.node.image;"rw_node")+{profiles:["node"],network_mode:"host",env_file:env("private/node.env")}) else . end |
-      .volumes |= with_entries(.value.labels={"io.pdm.remnawave.installation":$owner})' | rw_atomic "$target"
-    rw_stats_compose "$target" "$versions"
-}
-rw_render_env() {
-    local panel_port sub_port authority sub_authority
-    panel_port=$(rw_port https)
-    sub_port=$(rw_subscription_port)
-    authority=$(rw_cfg '.domains.panel // empty'); sub_authority=$(rw_cfg '.domains.subscription // empty')
-    if [[ -n $panel_port && $panel_port != 443 ]]; then authority+=:$panel_port; fi
-    if [[ -n $sub_port && $sub_port != 443 ]]; then sub_authority+=:$sub_port; fi
-    if [[ $RW_ROLE != node ]]; then
-        jq -r --slurpfile c "$RW_CFG" --arg front "https://$authority" --arg sub "$sub_authority" '
-          "APP_PORT=3000\nMETRICS_PORT=3001\nAPI_INSTANCES=1\nDATABASE_URL=postgresql://postgres:"+.postgres_password+"@rw_db:5432/remnawave\nREDIS_SOCKET=/var/run/valkey/valkey.sock\nAPP_SECRET="+.app_secret+
-          "\nPANEL_DOMAIN="+$c[0].domains.panel+"\nFRONT_END_DOMAIN="+$front+"\nSUB_PUBLIC_DOMAIN="+$sub+"\nMETRICS_USER=metrics\nMETRICS_PASS="+.metrics_password+
-          "\nWEBHOOK_SECRET_HEADER="+.webhook_secret+"\nWEBHOOK_ENABLED=false\nIS_TELEGRAM_NOTIFICATIONS_ENABLED=false"' "$RW_OUT/private/secrets.json" | rw_atomic "$RW_OUT/private/panel.env"
-        jq -r '"POSTGRES_USER=postgres\nPOSTGRES_DB=remnawave\nTZ=UTC\nPOSTGRES_PASSWORD="+.postgres_password' "$RW_OUT/private/secrets.json" | rw_atomic "$RW_OUT/private/postgres.env"
-        jq --slurpfile c "$RW_CFG" '{username:$c[0].admin.username,password:.admin_password}' "$RW_OUT/private/secrets.json" | rw_atomic "$RW_OUT/private/admin.json"
-        jq -r --slurpfile c "$RW_CFG" '"AUTH_TOKEN_LIFETIME=3600\nREMNAWAVE_PANEL_DOMAIN="+$c[0].domains.panel+"\nAUTHP_ADMIN_USER="+$c[0].admin.username+"\nAUTHP_ADMIN_EMAIL="+$c[0].admin.email+"\nAUTHP_ADMIN_SECRET="+.auth_password' "$RW_OUT/private/secrets.json" | rw_atomic "$RW_OUT/private/caddy.env"
-    else printf '# Separate node, no admin identity store.\n' | rw_atomic "$RW_OUT/private/caddy.env"; fi
-    if [[ ! -f $RW_OUT/private/subscription.env ]]; then printf 'APP_PORT=3010\nREMNAWAVE_PANEL_URL=http://rw_panel:3000\nREMNAWAVE_API_TOKEN=\nTRUST_PROXY=1\n' | rw_atomic "$RW_OUT/private/subscription.env"; fi
-    if [[ ! -f $RW_OUT/private/node.env ]]; then printf 'NODE_PORT=%s\n' "$(rw_port node_api)" | rw_atomic "$RW_OUT/private/node.env"; fi
-}
-rw_render_profile() {
-    [[ $RW_ROLE != panel ]] || return 0
-    jq --slurpfile c "$RW_CFG" '
-      $c[0] as $c | . as $s |
-      {log:{loglevel:"warning"},inbounds:(["tcp","xhttp"]|map(. as $transport |
-        {tag:("PDM-"+$c.environment_id+"-"+ascii_upcase),listen:"::",port:(if .=="tcp" then $c.ports.reality else $c.ports.xhttp end),protocol:"vless",settings:{clients:[],decryption:"none"},
-         streamSettings:{network:$transport,security:"reality",realitySettings:{dest:("127.0.0.1:"+($c.ports.reality_target|tostring)),xver:0,serverNames:[$c.domains.node],privateKey:$s.reality_private,shortIds:[$s.short_id]}}} |
-        if $transport=="xhttp" then .streamSettings.xhttpSettings={mode:"auto",path:$s.xhttp_path} else . end)),
-       outbounds:[{tag:"direct",protocol:"freedom",settings:{domainStrategy:"UseIPv4"}},{tag:"block",protocol:"blackhole"}]}' "$RW_OUT/private/secrets.json" | rw_atomic "$RW_OUT/private/xray-profile.json"
-}
-rw_render_caddy() {
-    local http name kind port target ca
-    http=$(rw_port http); ca=$(rw_cfg '.acme')
-    {
-        printf '{\n\tadmin 127.0.0.1:%s\n\tauto_https disable_redirects\n\thttp_port %s\n' "$(rw_port caddy_admin)" "$http"
-        printf '\tcert_issuer acme {\n\t\tdisable_tlsalpn_challenge\n'
-        [[ $ca != staging ]] || printf '\t\tdir https://acme-staging-v02.api.letsencrypt.org/directory\n'
-        printf '\t}\n'
-        [[ $RW_ROLE == node ]] || rw_auth_global
-        printf '}\n'
-        while IFS=$'\t' read -r kind name; do
-            case $kind in node) port=$(rw_port reality_target);; subscription) port=$(rw_subscription_port);; *) port=$(rw_port https);; esac
-            printf '\nhttps://%s:%s {\n' "$name" "$port"
-            [[ $kind != node ]] || printf '\tbind 127.0.0.1\n'
-            case $kind in
-              panel)
-                printf '\troute /api/* {\n\t\tauthorize with panelpolicy\n\t\treverse_proxy 127.0.0.1:%s\n\t}\n' "$(rw_port panel_api)"
-                printf '\thandle /r {\n\t\trewrite * /auth\n\t\trequest_header +X-Forwarded-Prefix /r\n\t\tauthenticate with remnawaveportal\n\t}\n\troute /r* {\n\t\tauthenticate with remnawaveportal\n\t}\n'
-                printf '\troute /* {\n\t\tauthorize with panelpolicy\n\t\treverse_proxy 127.0.0.1:%s\n\t}\n' "$(rw_port panel_api)";;
-              subscription) printf '\treverse_proxy 127.0.0.1:%s\n' "$(rw_port subscription_api)";;
-              node) printf '\troot * /srv\n\tfile_server\n';;
-            esac
-            printf '}\n'
-        done < <(jq -r '.domains|to_entries[]|[.key,.value]|@tsv' "$RW_CFG")
-        # A shared hostname has one HTTP listener, with the panel as its default redirect.
-        while IFS=$'\t' read -r kind name; do
-            printf 'http://%s:%s {\n' "$name" "$http"
-            [[ $RW_MODE != fi-parallel ]] || printf '\tbind 127.0.0.1\n'
-            case $kind in node) target=$(rw_port reality);; subscription) target=$(rw_subscription_port);; *) target=$(rw_port https);; esac
-            printf '\tredir https://%s:%s{uri} 308\n}\n' "$name" "$target"
-        done < <(rw_http_sites)
-    } | rw_atomic "$RW_OUT/Caddyfile"
-}
-rw_render() {
-    mkdir -p "$RW_OUT/site" "$RW_OUT/private"; chmod 700 "$RW_OUT" "$RW_OUT/site" "$RW_OUT/private"
-    cat "$RW_CFG" | rw_atomic "$RW_OUT/config.json"
-    if [[ -n ${RW_VERSION_FILE:-} ]]; then
-        rw_versions_check "$RW_VERSION_FILE"
-        jq --arg env "$RW_ENV" '.environment_id=$env' "$RW_VERSION_FILE" | rw_atomic "$RW_OUT/versions.lock.json"
-    else rw_versions | jq --arg env "$RW_ENV" '.environment_id=$env' | rw_atomic "$RW_OUT/versions.lock.json"; fi
-    rw_secrets; rw_render_compose; rw_render_env; rw_render_profile; rw_render_caddy
-    rw_site_default
-    rw_install_ctl
-    jq -n --slurpfile c "$RW_CFG" --arg owner "$RW_OWNER" '{schema_version:1,environment_id:$c[0].environment_id,role:$c[0].role,domains:$c[0].domains,ports:$c[0].ports,ownership_label:$owner,nodes:[],access_groups:[],secret_files:["private/secrets.json","private/node.env"],grants_existing_users_access:false}' | rw_atomic "$RW_OUT/inventory.json"
+rw_security_remove_rules() {
+    # show added includes stored rules even when UFW is inactive after rollback.
+    # Parse only the two rule shapes this installer creates; never evaluate text.
+    local line body source port
+    local -a rule=()
+    ufw show added > "$RW_TMP/ufw-added" || rw_die 'Cannot read stored UFW rules.'
+    : > "$RW_TMP/ufw-remove"
+    while IFS= read -r line; do
+        [[ $line == *" comment '$RW_PROJECT'" ]] || continue
+        body=${line%" comment '$RW_PROJECT'"}; body=${body#ufw }
+        read -r -a rule <<< "$body"
+        if [[ ${#rule[@]} == 2 && ${rule[0]} == allow && ${rule[1]} =~ ^[0-9]{1,5}/(tcp|udp)$ ]]; then
+            port=${rule[1]%/*}
+        elif [[ ${#rule[@]} == 9 && ${rule[0]} == allow && ${rule[1]} == from && ${rule[3]} == to && ${rule[4]} == any && ${rule[5]} == port && ${rule[7]} == proto && ${rule[8]} == tcp ]]; then
+            source=${rule[2]}; port=${rule[6]}
+            [[ $source =~ ^[0-9a-fA-F:.]+$ ]] || rw_die 'Unexpected source in an owned UFW rule.'
+        else rw_die 'An owned UFW rule changed shape; review it before removal.'; fi
+        [[ $port =~ ^[1-9][0-9]{0,4}$ ]] && (( port<=65535 )) || rw_die 'Invalid port in an owned UFW rule.'
+        printf '%s\n' "$body" >> "$RW_TMP/ufw-remove"
+    done < "$RW_TMP/ufw-added"
+    while IFS= read -r body; do
+        read -r -a rule <<< "$body"
+        ufw --force delete "${rule[@]}" >/dev/null || rw_die 'Cannot remove an owned UFW rule.'
+    done < "$RW_TMP/ufw-remove"
 }
 # shellcheck shell=bash
 rw_resource_checks() {
@@ -1758,6 +586,7 @@ rw_resource_checks() {
 }
 rw_dns_checks() {
     local domain family
+    { rw_config_filter | sed '/^\.$/,$d'; printf '\n[inputs|select(ip)|ipnorm]|unique\n'; } > "$RW_TMP/dns.jq"
     while IFS= read -r domain; do
         : > "$RW_TMP/dns.txt"
         for family in A AAAA; do
@@ -1766,26 +595,25 @@ rw_dns_checks() {
             awk '$4=="A" || $4=="AAAA" {print $5}' "$RW_TMP/dig-answer.txt" >> "$RW_TMP/dns.txt"
         done
         # CNAMEs are excluded, but every A/AAAA address must match the declared set.
-        { rw_config_filter | sed '/^\.$/,$d'; printf '\n[inputs|select(ip)|ipnorm]|unique\n'; } > "$RW_TMP/dns.jq"
         jq -Rn -f "$RW_TMP/dns.jq" < "$RW_TMP/dns.txt" > "$RW_TMP/dns.json"
         jq -e --slurpfile actual "$RW_TMP/dns.json" '.public_addresses == $actual[0]' "$RW_CFG" >/dev/null || rw_die "A/AAAA records for $domain do not match public_addresses."
-    done < <(jq -r '.domains[]' "$RW_CFG")
+    done < <(jq -r '.domains|[.[]]|unique[]' "$RW_CFG")
 }
 rw_docker_ownership() {
-    local id owner project configs
-    while IFS= read -r id; do
-        [[ -n $id ]] || continue
-        owner=$(docker inspect --format '{{index .Config.Labels "io.pdm.remnawave.installation"}}' "$id")
-        project=$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project"}}' "$id")
-        configs=$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project.config_files"}}' "$id")
-        [[ $owner == "$RW_OWNER" && $project == "$RW_PROJECT" && $configs == "$RW_OUT/compose.json" ]] || rw_die 'A Compose project with this name belongs to another installation.'
-    done < <(docker ps -aq --filter "label=com.docker.compose.project=$RW_PROJECT")
+    local -a ids=()
+    docker ps -aq --filter "label=com.docker.compose.project=$RW_PROJECT" > "$RW_TMP/ownership-ids" || rw_die 'Cannot list installation containers.'
+    mapfile -t ids < "$RW_TMP/ownership-ids"
+    (( ${#ids[@]} )) || return 0
+    docker inspect --format '{{json .Config.Labels}}' "${ids[@]}" > "$RW_TMP/ownership-labels.jsonl" || rw_die 'Cannot inspect installation containers.'
+    jq -se --arg owner "$RW_OWNER" --arg project "$RW_PROJECT" --arg configs "$RW_OUT/compose.json" --argjson count "${#ids[@]}" '
+      length==$count and all(.[]; .["io.pdm.remnawave.installation"]==$owner and .["com.docker.compose.project"]==$project and .["com.docker.compose.project.config_files"]==$configs)' "$RW_TMP/ownership-labels.jsonl" >/dev/null || rw_die 'A Compose project with this name belongs to another installation.'
 }
 rw_port_checks() {
     local name port id pids row socket_pids owned_ids publication
     owned_ids=$(docker ps -q --filter "label=io.pdm.remnawave.installation=$RW_OWNER")
     : > "$RW_TMP/owned-pids"
     for id in $owned_ids; do docker top "$id" -eo pid | awk 'NR>1 && $1~/^[0-9]+$/ {print $1}' >> "$RW_TMP/owned-pids"; done
+    ss -H -lntp > "$RW_TMP/tcp-listeners" || rw_die 'Cannot read TCP listeners.'
     while IFS=$'\t' read -r name port; do
         while IFS= read -r row; do
             [[ -n $row ]] || continue
@@ -1802,7 +630,7 @@ rw_port_checks() {
                     (( publication )) || rw_die "TCP port $port ($name) is used by another service."
                 fi
             done
-        done < <(ss -H -lntp | awk -v p="$port" '$4 ~ (":" p "$") {print}')
+        done < <(awk -v p="$port" '$4 ~ (":" p "$") {print}' "$RW_TMP/tcp-listeners")
     done < <(jq -r '.ports|to_entries[]|[.key,.value]|@tsv' "$RW_CFG"; if rw_stats_enabled; then printf 'stats_api\t%s\n' "$(rw_stats_port)"; fi)
     # Docker NAT publications can exist without a listening docker-proxy process.
     while IFS= read -r id; do
@@ -1833,7 +661,11 @@ rw_network_check() {
       ($subnet|bounds) as $wanted | [inputs|select(test("^[0-9.]+/[0-9]+$"))|bounds] | all(.[]; .[1]<$wanted[0] or .[0]>$wanted[1])' < "$RW_TMP/networks" | grep -qx true || rw_die 'docker_subnet overlaps an existing network; specify another subnet.'
 }
 rw_preflight() {
-    rw_os; rw_resource_checks; rw_dns_checks
+    # apply already checked DNS/resources. A newly installed daemon consumes RAM,
+    # so repeat resource admission in that case before starting any containers.
+    rw_os
+    if [[ ${1:-} != --host-checked ]]; then rw_resource_checks; rw_dns_checks
+    elif [[ ${RW_DOCKER_INSTALLED:-0} == 1 ]]; then rw_resource_checks; fi
     /usr/sbin/sshd -t || rw_die 'sshd -t failed; SSH was not changed.'
     [[ $(timedatectl show -p NTPSynchronized --value) == yes ]] || rw_die 'Time synchronization could not be verified.'
     nft -j list ruleset >/dev/null || rw_die 'Cannot read the current firewall rules.'
@@ -1842,463 +674,20 @@ rw_preflight() {
     rw_info 'Preflight passed: OS, DNS A/AAAA, RAM/disk, ports, Docker and networks.'
 }
 # shellcheck shell=bash
-rw_api() {
-    local method=$1 path=$2 body=${3:-} target=$4 code
-    local -a args=(--silent --show-error --connect-timeout 5 --max-time 30 --request "$method" --header 'Content-Type: application/json' --header 'X-Forwarded-Proto: https' --header 'X-Forwarded-For: 127.0.0.1')
-    [[ -z ${RW_AUTH_CONF:-} ]] || args+=(--config "$RW_AUTH_CONF")
-    [[ ${RW_AUTH_KIND:-} != admin ]] || args+=(--header 'X-Remnawave-Client-Type: browser')
-    [[ -z $body ]] || args+=(--data-binary "@$body")
-    code=$(curl "${args[@]}" --output "$target" --write-out '%{http_code}' "$RW_API_ROOT$path") || return 1
-    [[ $code =~ ^2[0-9][0-9]$ ]] || return 1
-    [[ $code != 204 ]] || return 0
-    jq -e 'type=="object" and has("response")' "$target" >/dev/null
-}
-rw_auth_header() {
-    local file=$1
-    [[ -f $file && ! -L $file && $(stat -c %a "$file") == 600 ]] || rw_die 'The token must be stored in a separate regular file with mode 0600.'
-    grep -qxE '[A-Za-z0-9._=+/-]+' "$file" || rw_die 'Unsupported token format.'
-    { printf 'header = "Authorization: Bearer '; tr -d '\n' < "$file"; printf '"\n'; } | rw_atomic "$RW_TMP/auth.curl"
-    RW_AUTH_CONF=$RW_TMP/auth.curl
-    RW_AUTH_KIND=${2:-api}
-}
-rw_wait_panel() {
-    local attempt
-    RW_API_ROOT=http://127.0.0.1:$(rw_port panel_api); RW_AUTH_CONF=
-    for ((attempt=0; attempt<60; attempt++)); do rw_api GET /api/auth/status '' "$RW_TMP/status.json" 2>/dev/null && return 0; sleep 2; done
-    rw_die 'The panel did not become ready; new containers were retained for diagnostics.'
-}
-rw_panel_login() {
-    RW_API_ROOT=http://127.0.0.1:$(rw_port panel_api); RW_AUTH_CONF=
-    rw_api GET /api/auth/status '' "$RW_TMP/status.json" || rw_die 'The panel API is unavailable.'
-    if jq -e '.response.isRegisterAllowed == true' "$RW_TMP/status.json" >/dev/null; then
-        rw_info 'Creating the first administrator through the private panel API.'
-        rw_api POST /api/auth/register "$RW_OUT/private/admin.json" "$RW_TMP/login.json" || {
-            # Registration may have succeeded before a lost response. Reconcile by login, not another register.
-            rw_api POST /api/auth/login "$RW_OUT/private/admin.json" "$RW_TMP/login.json" || rw_die 'Administrator creation could not be confirmed.'
-        }
-    else rw_api POST /api/auth/login "$RW_OUT/private/admin.json" "$RW_TMP/login.json" || rw_die 'The existing administrator does not match saved credentials; overwrite is forbidden.'; fi
-    jq -er '.response.accessToken' "$RW_TMP/login.json" | rw_atomic "$RW_TMP/admin.jwt"
-    rw_auth_header "$RW_TMP/admin.jwt" admin
-    if [[ ${RW_MUTATING:-0} == 1 ]]; then rw_manifest_set '.admin_bootstrapped=true'; fi
-}
-rw_token() {
-    local key=$1 scopes=$2
-    if [[ -s $RW_OUT/private/$key.token && $(jq -r --arg key "$key" '.tokens[$key].expires_at // 0|floor' "$RW_OUT/manifest.json") -gt $(date +%s) && $(jq -r --arg key "$key" '.token_operations[$key] // null' "$RW_OUT/manifest.json") == null ]]; then return; fi
-    rw_token_replace "$key" "$scopes" bootstrap
-}
-rw_token_scopes() {
-    rw_api GET /api/tokens/scopes '' "$RW_TMP/scopes.json" || rw_die 'Cannot verify the API scope catalog.'
-    jq '[.response.resources[].endpoints[]|select(.kind=="read" and (.path|test("/api/system/metadata$|/api/sub(/|$)|/api/subscriptions?(/|$)|/api/(subscription-page-configs?|subpage-configs?)(/|$)")))|.key]|unique' "$RW_TMP/scopes.json" > "$RW_TMP/subscription-scopes.json"
-    jq -e 'length>0 and all(.!="*")' "$RW_TMP/subscription-scopes.json" >/dev/null || rw_die 'Required subscription-page scopes were not found; a wildcard token will not be issued.'
-    jq '[.response.resources[].endpoints[]|select((.method|ascii_upcase)=="GET" or (.method|ascii_upcase)=="POST")|select(.path|test("^/api/(nodes|config-profiles|hosts|internal-squads)(/\\{[^/]+\\})?$|^/api/keygen$"))|.key]|unique' "$RW_TMP/scopes.json" > "$RW_TMP/installer-scopes.json"
-    jq -e 'length>0 and all(.!="*")' "$RW_TMP/installer-scopes.json" >/dev/null || rw_die 'Required node management scopes were not found.'
-}
-rw_subscription_env() {
-    {
-        printf 'APP_PORT=3010\nREMNAWAVE_PANEL_URL=http://rw_panel:3000\nTRUST_PROXY=1\nREMNAWAVE_API_TOKEN='
-        tr -d '\n' < "$RW_OUT/private/subscription.token"; printf '\n'
-    } | rw_atomic "$RW_OUT/private/subscription.env"
-}
-rw_panel_tokens() {
-    rw_token_scopes
-    rw_token subscription "$RW_TMP/subscription-scopes.json"
-    rw_token installer "$RW_TMP/installer-scopes.json"
-    rw_subscription_env
-    rw_auth_header "$RW_OUT/private/installer.token"
-}
-rw_api_object() {
-    local key=$1 endpoint=$2 collection=$3 name=$4 request=$5 uuid intent count
-    uuid=$(jq -r --arg key "$key" '.api[$key].uuid // empty' "$RW_OUT/manifest.json")
-    if [[ -n $uuid ]]; then
-        rw_api GET "$endpoint/$uuid" '' "$RW_TMP/object.json" || rw_die 'A previously registered API object is unavailable.'
-        jq -e --arg name "$name" '.response.name==$name or .response.remark==$name' "$RW_TMP/object.json" >/dev/null || rw_die 'The API UUID no longer matches this installation.'
-        return
-    fi
-    rw_api GET "$endpoint" '' "$RW_TMP/objects.json" || rw_die 'Cannot read the API catalog.'
-    jq --arg name "$name" "$collection | map(select(.name==\$name or .remark==\$name))" "$RW_TMP/objects.json" > "$RW_TMP/matches.json"
-    count=$(jq 'length' "$RW_TMP/matches.json")
-    intent=$(jq -r --arg key "$key" '.api[$key].intent // empty' "$RW_OUT/manifest.json")
-    if (( count > 0 )); then
-        [[ -n $intent && $count == 1 && $intent == $(sha256sum "$request" | cut -d' ' -f1) ]] || rw_die 'An unrelated API object has the same name; installation stopped.'
-        jq -e --slurpfile request "$request" '.[0] as $actual | $request[0] | to_entries | all(.[]; . as $entry | $actual[$entry.key]==$entry.value)' "$RW_TMP/matches.json" >/dev/null || rw_die 'The reconciled response does not match the recorded request.'
-        jq '{response:.[0]}' "$RW_TMP/matches.json" > "$RW_TMP/object.json"
-    else
-        intent=$(sha256sum "$request" | cut -d' ' -f1)
-        rw_manifest_set '.api[$key].intent=$intent' --arg key "$key" --arg intent "$intent"
-        rw_api POST "$endpoint" "$request" "$RW_TMP/object.json" || rw_die 'API object creation is unconfirmed; retry will reconcile the recorded intent.'
-    fi
-    uuid=$(jq -er '.response.uuid' "$RW_TMP/object.json")
-    [[ $uuid =~ ^[a-f0-9-]{36}$ ]] || rw_die 'Invalid API UUID.'
-    rw_manifest_set '.api[$key].uuid=$uuid' --arg key "$key" --arg uuid "$uuid"
-}
-rw_register_node() {
-    local config=$1 package=$2 address=$3 profile_file=${4:-$RW_OUT/private/xray-profile.json} prefix profile_uuid node_uuid transport inbound
-    local env owner
-    local api_owner
-    api_owner=$(jq -r '.api_namespace_owner // .ownership_label' "$RW_OUT/manifest.json")
-    env=$(jq -r '.environment_id' "$config"); owner=$(printf '%s' "$env:$api_owner" | sha256sum | cut -c1-8)
-    prefix=PDM-${env:0:10}-$owner
-    jq --arg name "$prefix" '{name:$name,config:.}' "$profile_file" > "$RW_TMP/profile-request.json"
-    rw_api_object "profile-$env" /api/config-profiles '.response.configProfiles' "$prefix" "$RW_TMP/profile-request.json"
-    profile_uuid=$(jq -r --arg key "profile-$env" '.api[$key].uuid' "$RW_OUT/manifest.json")
-    rw_api GET "/api/config-profiles/$profile_uuid" '' "$RW_TMP/profile.json" || rw_die 'Cannot retrieve profile inbounds.'
-    jq -e '.response.inbounds|length==2' "$RW_TMP/profile.json" >/dev/null || rw_die 'Both TCP and XHTTP inbounds were not returned.'
-    jq -n --arg name "$prefix" --arg address "$address" --arg profile "$profile_uuid" --arg owner "$api_owner" \
-      --slurpfile c "$config" --slurpfile p "$RW_TMP/profile.json" '{name:$name,address:$address,port:$c[0].ports.node_api,countryCode:$c[0].node_country,note:("pdm-install:"+$owner),configProfile:{activeConfigProfileUuid:$profile,activeInbounds:[$p[0].response.inbounds[].uuid]}}' > "$RW_TMP/node-request.json"
-    rw_api_object "node-$env" /api/nodes '.response' "$prefix" "$RW_TMP/node-request.json"
-    node_uuid=$(jq -r --arg key "node-$env" '.api[$key].uuid' "$RW_OUT/manifest.json")
-    for transport in tcp xhttp; do
-        inbound=$(jq -er --arg tag "PDM-$env-${transport^^}" '.response.inbounds[]|select(.tag==$tag)|.uuid' "$RW_TMP/profile.json")
-        jq -n --arg remark "$prefix-$transport" --arg profile "$profile_uuid" --arg inbound "$inbound" --arg node "$node_uuid" --arg transport "$transport" --slurpfile c "$config" --slurpfile xray "$profile_file" \
-          '{remark:$remark,inbound:{configProfileUuid:$profile,configProfileInboundUuid:$inbound},address:$c[0].domains.node,port:(if $transport=="tcp" then $c[0].ports.reality else $c[0].ports.xhttp end),sni:$c[0].domains.node,fingerprint:"chrome",nodes:[$node]} | if $transport=="xhttp" then .path=($xray[0].inbounds[]|select(.streamSettings.network=="xhttp")|.streamSettings.xhttpSettings.path) else . end' > "$RW_TMP/host-request.json"
-        rw_api_object "host-$env-$transport" /api/hosts '.response' "$prefix-$transport" "$RW_TMP/host-request.json"
-        jq -n --arg name "$prefix-$transport" --arg inbound "$inbound" '{name:$name,inbounds:[$inbound]}' > "$RW_TMP/squad-request.json"
-        rw_api_object "squad-$env-$transport" /api/internal-squads '.response.internalSquads' "$prefix-$transport" "$RW_TMP/squad-request.json"
-        local squad_uuid
-        squad_uuid=$(jq -r --arg key "squad-$env-$transport" '.api[$key].uuid' "$RW_OUT/manifest.json")
-        jq --arg env "$env" --arg transport "$transport" --arg node "$node_uuid" --arg uuid "$squad_uuid" \
-          '.access_groups=([.access_groups[]?|select(.environment_id!=$env or .transport!=$transport)]+[{environment_id:$env,transport:$transport,node_uuid:$node,uuid:$uuid}])' "$RW_OUT/inventory.json" | rw_atomic "$RW_OUT/inventory.json"
-    done
-    rw_api GET /api/keygen '' "$RW_TMP/node-secret.json" || rw_die 'The panel did not return its native SECRET_KEY.'
-    jq -e '.response.secretKey|type=="string" and test("^[A-Za-z0-9+/=_-]+$")' "$RW_TMP/node-secret.json" >/dev/null || rw_die 'Invalid panel SECRET_KEY.'
-    local node_fp
-    node_fp=$(jq -Sc . "$config" | sha256sum | cut -d' ' -f1)
-    jq -n --slurpfile c "$config" --slurpfile k "$RW_TMP/node-secret.json" --arg node "$node_uuid" --arg profile "$profile_uuid" --arg fp "$node_fp" \
-      '{schema_version:1,environment_id:$c[0].environment_id,config_fingerprint:$fp,expires_at:(now+3600),node_uuid:$node,config_profile_uuid:$profile,secret_key:$k[0].response.secretKey}' | rw_atomic "$package"
-    jq --arg node "$node_uuid" --arg profile "$profile_uuid" --slurpfile p "$RW_TMP/profile.json" '.nodes=([.nodes[]?|select(.node_uuid!=$node)]+[{node_uuid:$node,config_profile_uuid:$profile,inbound_uuids:[$p[0].response.inbounds[].uuid]}])' "$RW_OUT/inventory.json" | rw_atomic "$RW_OUT/inventory.json"
-}
-rw_node_connection() {
-    local package=$1
-    [[ -f $package && ! -L $package && $(stat -c %a "$package") == 600 ]] || rw_die 'The node connection file must be a regular file with mode 0600.'
-    jq -e --arg env "$RW_ENV" --arg fp "$RW_FINGERPRINT" '.schema_version==1 and .environment_id==$env and .config_fingerprint==$fp and .expires_at>now and (.secret_key|test("^[A-Za-z0-9+/=_-]+$"))' "$package" >/dev/null || rw_die 'The connection package expired or belongs to another node configuration.'
-    if [[ $package == "$RW_OUT/private/connection.json" ]]; then cat "$package" | rw_atomic "$package"; fi
-    if grep -q '^SECRET_KEY=' "$RW_OUT/private/node.env"; then
-        jq -e --slurpfile package "$package" '.node_uuid==$package[0].node_uuid and .config_profile_uuid==$package[0].config_profile_uuid' "$RW_OUT/manifest.json" >/dev/null || rw_die 'The existing key belongs to another node record.'
-        return
-    fi
-    jq -r --arg port "$(rw_port node_api)" '"NODE_PORT="+$port+"\nSECRET_KEY="+.secret_key' "$package" | rw_atomic "$RW_OUT/private/node.env"
-    rw_manifest_set '.node_uuid=$node|.config_profile_uuid=$profile' --arg node "$(jq -r '.node_uuid' "$package")" --arg profile "$(jq -r '.config_profile_uuid' "$package")"
-}
-rw_firewall() {
-    local port sources4 sources6 id rules=$RW_OUT/private/firewall.nft
-    port=$(rw_port node_api)
-    if [[ $RW_ROLE == node ]]; then
-        sources4=$(jq -r '[.panel_addresses[]|select(contains(":")|not)]|join(", ")' "$RW_CFG")
-        sources6=$(jq -r '[.panel_addresses[]|select(contains(":"))]|join(", ")' "$RW_CFG")
-    else sources4=$RW_NET_PREFIX.10; sources6=; fi
-    {
-        if nft -j list table inet "$RW_TABLE" > "$RW_TMP/existing-table.json" 2>/dev/null; then
-            jq -e --arg owner "$RW_OWNER" '.nftables | any(.table.comment==$owner)' "$RW_TMP/existing-table.json" >/dev/null || rw_die 'An nftables table with this name belongs to another installation.'
-            printf 'delete table inet %s\n' "$RW_TABLE"
-        fi
-        printf 'table inet %s {\n comment "%s"\n chain input { type filter hook input priority -5; policy accept;\n' "$RW_TABLE" "$RW_OWNER"
-        if [[ -n $port ]]; then
-            printf ' iifname "lo" tcp dport %s accept\n' "$port"
-            [[ -z $sources4 ]] || printf ' ip saddr { %s } tcp dport %s accept\n' "$sources4" "$port"
-            [[ -z $sources6 ]] || printf ' ip6 saddr { %s } tcp dport %s accept\n' "$sources6" "$port"
-            printf ' tcp dport %s drop\n' "$port"
-        fi
-        printf '}\n'
-        if [[ $RW_ROLE != node ]]; then
-            printf ' chain forward { type filter hook forward priority -5; policy accept;\n ip daddr %s ip saddr != %s tcp dport { 3000, 3001, 3010, 5432, 6379, 13100 } drop\n }\n' "$RW_SUBNET" "$RW_SUBNET"
-        fi
-        printf '}\n'
-    } | rw_atomic "$rules"
-    nft --check -f "$rules" || rw_die 'Installation nftables validation failed.'
-    nft -f "$rules"
-    # On reboot the table is absent; load only the table declaration, not its previous deletion.
-    sed '/^delete table /d' "$rules" | rw_atomic "$RW_OUT/private/firewall-boot.nft"
-    local unit=/etc/systemd/system/$RW_PROJECT-firewall.service
-    if [[ -f $unit ]] && ! grep -qF "$RW_OWNER" "$unit"; then rw_die 'Firewall systemd unit ownership conflict.'; fi
-    {
-        printf '# %s\n[Unit]\nDescription=Remnawave scoped firewall\nBefore=docker.service\nAfter=network-pre.target\n\n[Service]\nType=oneshot\nExecStart=/usr/sbin/nft -f %s/private/firewall-boot.nft\nRemainAfterExit=yes\n\n[Install]\nWantedBy=multi-user.target\n' "$RW_OWNER" "$RW_OUT"
-    } > "$unit"
-    chmod 644 "$unit"; systemctl daemon-reload; systemctl enable "$RW_PROJECT-firewall.service" >/dev/null
-    rw_manifest_set '.firewall_installed=true'
-    if command -v ufw >/dev/null 2>&1 && ufw status | grep -q '^Status: active'; then
-        while IFS= read -r port; do ufw allow "$port/tcp" comment "$RW_PROJECT" >/dev/null; done < <(jq -r '.ports | [.http,.https,.subscription_https,.reality,.xhttp] | map(select(.!=null and .!=18080)) | unique[]' "$RW_CFG")
-        port=$(rw_port node_api)
-        if [[ -n $port ]]; then
-            for id in $sources4 $sources6; do ufw allow from "${id%,}" to any port "$port" proto tcp comment "$RW_PROJECT" >/dev/null; done
-        fi
-        rw_manifest_set '.ufw_rules_added=true'
-    fi
-}
-rw_existing_caddy_check() {
-    local file container health
-    file=$(rw_cfg '.existing_caddy.config_file // empty'); container=$(rw_cfg '.existing_caddy.container // empty'); health=$(rw_cfg '.existing_caddy.health_url // empty')
-    [[ $file == /* && -f $file && ! -L $file && $container =~ ^[A-Za-z0-9_.-]+$ && $health =~ ^https://[A-Za-z0-9.:-]+/?$ ]] || rw_die 'Parallel installation requires existing_caddy: config_file, container and health_url.'
-    docker inspect --format '{{.State.Running}}' "$container" | grep -qx true || rw_die 'The existing Caddy container is not running.'
-    curl -f --silent --show-error --connect-timeout 5 --max-time 10 "$health" >/dev/null || rw_die 'The existing site is unavailable before changes.'
-}
-rw_existing_caddy_candidate() {
-    local file=$1 candidate=$2 kind domain https matcher=pdm_rw_${RW_ENV//-/_}_redirect
-    cat "$file" > "$candidate"
-    while IFS=$'\t' read -r kind domain; do
-        if grep -Fxq "http://$domain {" "$candidate"; then
-            # The FI HTTP site already serves this hostname. Scope the existing
-            # redirect away from ACME, preserving its target and other directives.
-            # Unrecognised layouts stop here instead of guessing at Caddy syntax.
-            awk -v site="http://$domain {" -v domain="$domain" -v project="$RW_PROJECT" -v matcher="$matcher" -v port="$(rw_port http)" '
-              $0==site {active=1}
-              active && $1=="redir" {
-                if (NF!=3 || index($2,"https://" domain)!=1) exit 42;
-                print "\t# BEGIN " project;
-                print "\t@" matcher " not path /.well-known/acme-challenge/*";
-                print "\thandle /.well-known/acme-challenge/* {";
-                print "\t\treverse_proxy 127.0.0.1:" port;
-                print "\t}";
-                print "\tredir @" matcher " " $2 " " $3;
-                print "\t# END " project;
-                changed++; next
-              }
-              active && $0=="}" {active=0}
-              {print}
-              END {if (changed!=1) exit 42}' "$candidate" > "$RW_TMP/existing-caddy.site" || rw_die 'The existing HTTP site requires review; its configuration was not changed.'
-            cat "$RW_TMP/existing-caddy.site" > "$candidate"
-        else
-            case $kind in node) https=$(rw_port reality);; subscription) https=$(rw_subscription_port);; *) https=$(rw_port https);; esac
-            printf '\n# BEGIN %s\nhttp://%s {\n handle /.well-known/acme-challenge/* {\n  reverse_proxy 127.0.0.1:%s\n }\n handle {\n  redir https://%s:%s{uri} 308\n }\n}\n# END %s\n' "$RW_PROJECT" "$domain" "$(rw_port http)" "$domain" "$https" "$RW_PROJECT" >> "$candidate"
-        fi
-    done < <(rw_http_sites)
-}
-rw_existing_caddy_apply() {
-    [[ $RW_MODE == fi-parallel ]] || return 0
-    local file container kind domain https code candidate=$RW_TMP/existing-caddy.new
-    file=$(rw_cfg '.existing_caddy.config_file'); container=$(rw_cfg '.existing_caddy.container')
-    if grep -qF "# BEGIN $RW_PROJECT" "$file"; then
-        [[ -f $RW_OUT/private/existing-caddy.applied.sha256 ]] || rw_die 'Unknown route in the existing Caddy configuration.'
-        [[ $(sha256sum "$file" | cut -d' ' -f1) == $(cat "$RW_OUT/private/existing-caddy.applied.sha256") ]] || rw_die 'The existing Caddy configuration changed after installation; review is required.'
-        rw_manifest_set '.existing_caddy_updated=true'
-        return
-    fi
-    cp -p -- "$file" "$RW_OUT/private/existing-caddy.before"; chmod 600 "$RW_OUT/private/existing-caddy.before"
-    rw_existing_caddy_candidate "$file" "$candidate"
-    docker cp "$candidate" "$container:/tmp/$RW_PROJECT.Caddyfile"
-    docker exec --user 0 "$container" caddy validate --config "/tmp/$RW_PROJECT.Caddyfile" --adapter caddyfile >/dev/null || rw_die 'The complete existing Caddy configuration failed validation.'
-    RW_EXISTING_CADDY_FILE=$file; RW_EXISTING_CADDY_CONTAINER=$container; RW_CADDY_ROLLBACK_PENDING=1
-    # Preserve the inode of a single-file Docker bind mount; atomic rename would leave the old file mounted.
-    cat "$candidate" > "$file"
-    if ! docker exec "$container" caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null || ! curl -f --silent --max-time 10 "$(rw_cfg '.existing_caddy.health_url')" >/dev/null; then
-        cat "$RW_OUT/private/existing-caddy.before" > "$file"
-        docker exec "$container" caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null || true
-        rw_die 'Existing Caddy reload validation failed; the original file was restored.'
-    fi
-    sha256sum "$file" | cut -d' ' -f1 | rw_atomic "$RW_OUT/private/existing-caddy.applied.sha256"
-    rw_manifest_set '.existing_caddy_updated=true'
-    RW_CADDY_ROLLBACK_PENDING=0
-}
-rw_apply() {
-    rw_root; rw_os
-    if [[ -f $RW_OUT/manifest.json ]]; then
-        [[ -z ${RW_VERSION_FILE:-} ]] || rw_die 'Use upgrade to change versions of an existing installation.'
-        rw_owned
-        rw_lock; rw_resume_writes
-        rw_verify_files; rw_ssh_idle; rw_security_idle
-        [[ $(jq -r '.config_fingerprint' "$RW_OUT/manifest.json") == "$RW_FINGERPRINT" ]] || rw_die 'Configuration parameters changed; keys and configuration will not be overwritten.'
-    else
-        [[ ! -d $RW_OUT || -z $(find "$RW_OUT" -mindepth 1 -maxdepth 1 -print -quit) ]] || rw_die 'The directory is not empty and is not owned by the installer.'
-    fi
-    rw_resource_checks; rw_dns_checks; rw_docker_install; rw_preflight
-    rw_lock
-    RW_MUTATING=1
-    if [[ ! -f $RW_OUT/manifest.json ]]; then rw_manifest preparing; fi
-    if [[ $(jq -r '.status' "$RW_OUT/manifest.json") == preparing ]]; then rw_render; rw_manifest_set '.status="prepared"'; fi
-    if [[ $(jq -r '.status' "$RW_OUT/manifest.json") == prepared && -z $(docker ps -q --filter "label=io.pdm.remnawave.installation=$RW_OWNER") ]]; then
-        # A never-started package can receive template fixes without replacing secrets or pinned images.
-        rw_render_compose; rw_render_caddy; rw_install_ctl; rw_track_files
-    fi
-    rw_owned; rw_compose config --quiet
-    rw_security_capture
-    rw_info 'Pulling pinned Docker images.'
-    rw_compose --profile public --profile node pull
-    if ! rw_compose --profile public run --rm --no-deps --entrypoint caddy rw_caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile > "$RW_TMP/caddy-check.log" 2>&1; then
-        cat "$RW_TMP/caddy-check.log" | rw_atomic "$RW_OUT/private/caddy-validation.log"
-        rw_die 'Caddy configuration validation failed before publication. See private/caddy-validation.log.'
-    fi
-    rw_firewall
-    if [[ $RW_ROLE != node ]]; then
-        rw_info 'Starting PostgreSQL, Valkey and Remnawave.'
-        rw_compose up -d --wait --wait-timeout 180 rw_db rw_valkey rw_panel
-        rw_wait_panel; rw_panel_login; rw_panel_tokens
-    fi
-    if [[ $RW_ROLE == panel-node ]]; then
-        rw_register_node "$RW_CFG" "$RW_OUT/private/connection.json" "$RW_PANEL_ADDRESS"
-        rw_node_connection "$RW_OUT/private/connection.json"
-    elif [[ $RW_ROLE == node ]]; then
-        if [[ -n ${RW_CONNECTION:-} ]]; then rw_node_connection "$RW_CONNECTION";
-        elif ! grep -q '^SECRET_KEY=' "$RW_OUT/private/node.env"; then
-            rw_manifest_set '.status="node-prepared-awaiting-attachment"'
-            rw_info "Node prepared in $RW_OUT. Run rwctl node attach on the panel server; SECRET_KEY is not generated locally."
-            rw_security_apply
-            rw_install_summary
-            return
-        fi
-    fi
-    rw_existing_caddy_apply
-    rw_info 'Starting Caddy/MFA and the public subscription page.'
-    rw_compose --profile public up -d rw_caddy
-    [[ $RW_ROLE == node ]] || rw_compose --profile public up -d rw_subscription
-    if [[ $RW_ROLE != panel ]]; then rw_compose --profile node up -d rw_node; fi
-    rw_manifest_set '.status="running-awaiting-acceptance"'
-    rw_doctor
-    rw_security_apply
-    rw_info "Containers started in $RW_OUT."
-    rw_install_summary
-}
-# shellcheck shell=bash
-rw_token_catalog() {
-    rw_api GET /api/tokens '' "$RW_TMP/tokens.json" || rw_die 'Cannot read the token catalog; changes stopped.'
-    jq -e '.response.tokens|type=="array"' "$RW_TMP/tokens.json" >/dev/null || rw_die 'Unknown token catalog format.'
-}
-rw_token_revoke() {
-    local uuid=$1
-    [[ $uuid =~ ^[a-f0-9-]{36}$ ]] || rw_die 'Invalid token UUID.'
-    rw_token_catalog
-    if jq -e --arg uuid "$uuid" '.response.tokens|any(.uuid==$uuid)' "$RW_TMP/tokens.json" >/dev/null; then
-        # DELETE may have completed before its response was lost. Confirm absence.
-        rw_api DELETE "/api/tokens/$uuid" '' "$RW_TMP/revoked.json" || true
-        rw_token_catalog
-        ! jq -e --arg uuid "$uuid" '.response.tokens|any(.uuid==$uuid)' "$RW_TMP/tokens.json" >/dev/null || rw_die 'Token revocation is unconfirmed; retry tokens rotate.'
-    fi
-}
-rw_token_epoch() { date -u -d "$1" +%s; }
-rw_token_record() {
-    local key=$1 file=$2 epoch
-    epoch=$(rw_token_epoch "$(jq -er '.expireAt' "$file")") || rw_die 'Unknown token expiration time.'
-    jq -e --argjson epoch "$epoch" '.uuid|test("^[a-f0-9-]{36}$")' "$file" >/dev/null || rw_die 'Invalid token UUID.'
-    rw_manifest_set '.tokens[$key]=($t[0]|{uuid,name,scopes,expires_at:$epoch})' --arg key "$key" --argjson epoch "$epoch" --slurpfile t "$file"
-}
-rw_token_replace() {
-    local key=$1 scopes=$2 mode=${3:-rotate} name old uuid count next=$RW_OUT/private/$1.next.json epoch namespace
-    [[ $key == installer || $key == subscription ]] || rw_die 'Unknown token purpose.'
-    rw_panel_login
-    rw_token_catalog
-    namespace=$(jq -r '.api_namespace_owner // .ownership_label' "$RW_OUT/manifest.json")
-    if [[ $(jq -r --arg key "$key" '.token_operations[$key].stage // empty' "$RW_OUT/manifest.json") == complete ]]; then
-        rw_managed_remove "private/$key.next.json"
-        rw_managed_remove "private/$key.previous.token"
-        rw_manifest_set 'del(.token_operations[$key],.token_intents[$key])' --arg key "$key"
-        return
-    fi
-    old=$(jq -r --arg key "$key" '.tokens[$key].uuid // empty' "$RW_OUT/manifest.json")
-    # A stored UUID may never refer to another installation's token.
-    if [[ -n $old ]]; then
-        jq --arg uuid "$old" '.response.tokens|map(select(.uuid==$uuid))' "$RW_TMP/tokens.json" > "$RW_TMP/old-token.json"
-        if jq -e 'length>0' "$RW_TMP/old-token.json" >/dev/null; then
-            jq -e --arg key "$key" --arg owner "${namespace:0:8}" --slurpfile m "$RW_OUT/manifest.json" '
-              length==1 and (.[0].name==($m[0].tokens[$key].name // ($key+"-"+$owner)))
-              and (($m[0].tokens[$key].scopes // .[0].scopes)|sort)==(.[0].scopes|sort)' "$RW_TMP/old-token.json" >/dev/null || rw_die 'Previous token ownership could not be verified.'
-        fi
-    fi
-    if ! jq -e --arg key "$key" '.token_operations[$key]!=null' "$RW_OUT/manifest.json" >/dev/null; then
-        [[ ! -f $next ]] || rw_die 'A token package exists without a journal; automatic replacement is forbidden.'
-        name="$key-${RW_OWNER:0:8}-$(openssl rand -hex 4)"
-        # Support the old interrupted bootstrap, whose token was never published.
-        if [[ $(jq -r --arg key "$key" '.token_intents[$key] // false' "$RW_OUT/manifest.json") == true && -z $old ]]; then name="$key-${namespace:0:8}"; fi
-        rw_manifest_set '.token_operations[$key]={name:$name,old_uuid:$old,old_record:(.tokens[$key] // null),scopes:$scopes[0],mode:$mode,stage:"creating"}' --arg key "$key" --arg name "$name" --arg old "$old" --arg mode "$mode" --slurpfile scopes "$scopes"
-    fi
-    name=$(jq -r --arg key "$key" '.token_operations[$key].name' "$RW_OUT/manifest.json")
-    old=$(jq -r --arg key "$key" '.token_operations[$key].old_uuid' "$RW_OUT/manifest.json")
-    if [[ -n $old && ! -f $RW_OUT/private/$key.previous.token ]]; then
-        [[ $(jq -r --arg key "$key" '.tokens[$key].uuid' "$RW_OUT/manifest.json") == "$old" && -s $RW_OUT/private/$key.token ]] || rw_die 'The previous token is unavailable for activation rollback.'
-        cat "$RW_OUT/private/$key.token" | rw_atomic "$RW_OUT/private/$key.previous.token"
-    fi
-    jq -e --arg key "$key" --slurpfile scopes "$scopes" '(.token_operations[$key].scopes|sort)==($scopes[0]|sort)' "$RW_OUT/manifest.json" >/dev/null || rw_die 'Scopes changed during the operation; review is required.'
-    if [[ ! -f $next ]]; then
-        jq --arg name "$name" '.response.tokens|map(select(.name==$name))' "$RW_TMP/tokens.json" > "$RW_TMP/token-matches.json"
-        count=$(jq 'length' "$RW_TMP/token-matches.json")
-        (( count<=1 )) || rw_die 'Multiple tokens match the journal; automatic revocation is forbidden.'
-        if (( count==1 )); then
-            jq -e --slurpfile s "$scopes" '.[0].scopes|sort==($s[0]|sort)' "$RW_TMP/token-matches.json" >/dev/null || rw_die 'The orphan token scopes do not match the journal.'
-            uuid=$(jq -r '.[0].uuid' "$RW_TMP/token-matches.json")
-            [[ $uuid != "$old" ]] || rw_die 'The replacement token matches the active token.'
-            rw_token_revoke "$uuid"
-        fi
-        jq -n --arg name "$name" --slurpfile s "$scopes" '{name:$name,expiresInDays:90,scopes:$s[0]}' > "$RW_TMP/token-request.json"
-        rw_api POST /api/tokens "$RW_TMP/token-request.json" "$RW_TMP/token-response.json" || rw_die 'Token creation response was lost. Retry this command; the journal permits revocation only of the owned unpublished token.'
-        jq -e --arg name "$name" --slurpfile s "$scopes" '.response.name==$name and (.response.scopes|sort)==($s[0]|sort) and (.response.token|type=="string" and test("^[A-Za-z0-9._=+/-]+$"))' "$RW_TMP/token-response.json" >/dev/null || rw_die 'Incomplete token creation response; continuation stopped.'
-        jq '.response' "$RW_TMP/token-response.json" | rw_atomic "$next"
-    fi
-    jq -e --arg name "$name" --slurpfile s "$scopes" '.name==$name and (.scopes|sort)==($s[0]|sort) and (.token|test("^[A-Za-z0-9._=+/-]+$"))' "$next" >/dev/null || rw_die 'The replacement package does not match the journal.'
-    epoch=$(rw_token_epoch "$(jq -r '.expireAt' "$next")")
-    (( epoch>$(date +%s) )) || rw_die 'The candidate token expired; review is required before creating another.'
-    rw_token_catalog
-    jq -e --slurpfile t "$next" '.response.tokens|any(.uuid==$t[0].uuid and .name==$t[0].name and .expireAt==$t[0].expireAt and (.scopes|sort)==($t[0].scopes|sort))' "$RW_TMP/tokens.json" >/dev/null || rw_die 'The replacement token is missing or changed in the panel.'
-    jq -er '.token' "$next" | rw_atomic "$RW_TMP/candidate.token"
-    rw_auth_header "$RW_TMP/candidate.token"
-    if [[ $key == subscription ]]; then
-        rw_api GET /api/system/metadata '' "$RW_TMP/token-probe.json" || rw_die 'The new subscription token failed API validation; the previous token was not revoked.'
-    else rw_api GET /api/nodes '' "$RW_TMP/token-probe.json" || rw_die 'The new management token failed API validation; the previous token was not revoked.'; fi
-    cat "$RW_TMP/candidate.token" | rw_atomic "$RW_OUT/private/$key.token"
-    rw_token_record "$key" "$next"
-    if [[ $key == subscription ]]; then
-        rw_subscription_env
-        if [[ -n $old || $(jq -r --arg key "$key" '.token_operations[$key].mode' "$RW_OUT/manifest.json") != bootstrap ]]; then
-            if ! rw_compose --profile public up -d --wait --wait-timeout 90 rw_subscription || ! rw_compose --profile public exec -T rw_subscription curl -fsS --max-time 10 http://127.0.0.1:3010/internal/health >/dev/null; then
-                rw_token_activation_rollback "$key"
-                rw_die 'Subscription activation failed; the previous token was restored. Retry tokens rotate.'
-            fi
-        fi
-    fi
-    rw_panel_login
-    [[ -z $old ]] || rw_token_revoke "$old"
-    rw_manifest_set '.token_operations[$key].stage="complete"' --arg key "$key"
-    rw_managed_remove "private/$key.next.json"
-    rw_managed_remove "private/$key.previous.token"
-    rw_manifest_set 'del(.token_operations[$key],.token_intents[$key])' --arg key "$key"
-    rw_info "Token $key replaced and verified; the previous token was revoked."
-}
-rw_token_activation_rollback() {
-    local key=$1
-    [[ -f $RW_OUT/private/$key.previous.token ]] || return 0
-    cat "$RW_OUT/private/$key.previous.token" | rw_atomic "$RW_OUT/private/$key.token"
-    rw_manifest_set '.tokens[$key]=.token_operations[$key].old_record' --arg key "$key"
-    rw_subscription_env
-    rw_compose --profile public up -d --wait --wait-timeout 90 rw_subscription || rw_info 'The previous token was restored in files, but the service needs diagnostics.'
-}
-rw_tokens_status() {
-    local key uuid expiry remaining bad=0
-    rw_panel_login; rw_token_catalog
-    for key in installer subscription; do
-        uuid=$(jq -r --arg key "$key" '.tokens[$key].uuid // empty' "$RW_OUT/manifest.json")
-        expiry=$(jq -r --arg uuid "$uuid" '.response.tokens[]|select(.uuid==$uuid)|.expireAt' "$RW_TMP/tokens.json")
-        if [[ -z $uuid || -z $expiry || ! -s $RW_OUT/private/$key.token ]]; then
-            rw_info "Token $key is missing: run rwctl tokens rotate --token $key."; bad=1; continue
-        fi
-        remaining=$(( $(rw_token_epoch "$expiry")-$(date +%s) ))
-        jq -n --arg purpose "$key" --arg expire_at "$expiry" --argjson remaining "$remaining" '{purpose:$purpose,expire_at:$expire_at,remaining_seconds:$remaining,rotation_due:($remaining<604800)}'
-        if (( remaining<604800 )); then rw_info "Token $key expires soon or expired: run rwctl tokens rotate --token $key."; fi
-        (( remaining>0 )) || bad=1
-    done
-    return "$bad"
-}
-rw_tokens_rotate() {
-    rw_root; rw_owned; rw_lock; rw_resume_writes; rw_verify_files; rw_ssh_idle
-    [[ $RW_ROLE != node ]] || rw_die 'A standalone node has no panel API tokens.'
-    [[ ${RW_TOKEN_PURPOSE:-all} == all || $RW_TOKEN_PURPOSE == installer || $RW_TOKEN_PURPOSE == subscription ]] || rw_die '--token must be all, installer or subscription.'
-    if (( RW_DRY_RUN )); then rw_tokens_status; return; fi
-    RW_MUTATING=1
-    rw_panel_login; rw_token_scopes
-    local key
-    for key in subscription installer; do
-        [[ ${RW_TOKEN_PURPOSE:-all} == all || $RW_TOKEN_PURPOSE == "$key" ]] || continue
-        rw_token_replace "$key" "$RW_TMP/$key-scopes.json"
-    done
-    rw_track_files
-}
-# shellcheck shell=bash
 rw_track_files() {
-    local file relative sum
-    : > "$RW_TMP/managed.jsonl"
+    local file relative
+    local -a paths=()
     while IFS= read -r relative; do
         [[ -n $relative && $relative != manifest.json && $relative != .rw.lock && $relative != /* && $relative != *'..'* ]] || continue
         file=$RW_OUT/$relative
         [[ -f $file && ! -L $file ]] || continue
-        sum=$(sha256sum "$file" | cut -d' ' -f1)
-        jq -n --arg path "$relative" --arg sum "$sum" '{path:$path,sha256:$sum}' >> "$RW_TMP/managed.jsonl"
+        paths+=("$relative")
     done < <({ [[ ! -f $RW_OUT/private/.managed-paths ]] || cat "$RW_OUT/private/.managed-paths"; jq -r '.managed_files[].path' "$RW_OUT/manifest.json"; printf '%s\n' 'private/.managed-paths'; } | LC_ALL=C sort -u)
-    jq -s '.' "$RW_TMP/managed.jsonl" > "$RW_TMP/managed.json"
+    : > "$RW_TMP/managed.sums"
+    if (( ${#paths[@]} )); then
+        (cd -- "$RW_OUT" && sha256sum --zero -- "${paths[@]}") > "$RW_TMP/managed.sums" || rw_die 'Cannot hash managed files.'
+    fi
+    jq -Rs 'split("\u0000")|map(select(length>0)|{path:.[66:],sha256:.[0:64]})' "$RW_TMP/managed.sums" > "$RW_TMP/managed.json"
     rw_manifest_set '.managed_files=$files[0]' --slurpfile files "$RW_TMP/managed.json"
 }
 rw_verify_files() {
@@ -2306,7 +695,7 @@ rw_verify_files() {
     while IFS=$'\t' read -r path sum; do
         [[ $path != /* && $path != *'..'* && $path != *$'\n'* ]] || rw_die 'Unsafe path in the manifest.'
         parent=$RW_OUT/$path
-        while [[ $parent != "$RW_OUT" ]]; do [[ ! -L $parent ]] || rw_die 'A managed path contains a symbolic link.'; parent=$(dirname -- "$parent"); done
+        while [[ $parent != "$RW_OUT" ]]; do [[ ! -L $parent ]] || rw_die 'A managed path contains a symbolic link.'; parent=${parent%/*}; done
         [[ -f $RW_OUT/$path && $(sha256sum "$RW_OUT/$path" | cut -d' ' -f1) == "$sum" ]] || rw_die "Managed file $path changed; review is required."
     done < <(jq -r '.managed_files[]|[.path,.sha256]|@tsv' "$RW_OUT/manifest.json")
 }
@@ -2316,44 +705,47 @@ rw_doctor() {
     printf 'null\n' > "$RW_TMP/doctor-mfa.json"
     rw_owned; rw_docker_ownership
     [[ $(jq -r '.status' "$RW_OUT/manifest.json") != node-prepared-awaiting-attachment ]] || rw_die 'The node is prepared but is not attached to a panel yet.'
+    rw_compose --profile public --profile node ps --services --status running > "$RW_TMP/running-services" || rw_die 'Cannot list running services.'
     while IFS= read -r service; do
-        [[ -n $(rw_compose --profile public --profile node ps -q "$service") ]] || rw_die "Running service $service is missing."
+        grep -Fxq "$service" "$RW_TMP/running-services" || rw_die "Running service $service is missing."
     done < <(jq -r '.services|keys[]' "$RW_OUT/compose.json")
     [[ $(stat -c %a "$RW_OUT/private") == 700 ]] || rw_die 'private/ must have mode 0700.'
     while IFS= read -r -d '' id; do [[ $(stat -c %a "$id") == 600 ]] || rw_die 'A secret file has overly permissive permissions.'; done < <(find "$RW_OUT/private" -type f -print0)
-    while IFS= read -r id; do
-        [[ -n $id ]] || continue
-        state=$(docker inspect --format '{{.State.Status}}' "$id"); service=$(docker inspect --format '{{index .Config.Labels "com.docker.compose.service"}}' "$id")
+    local -a ids=()
+    docker ps -aq --filter "label=io.pdm.remnawave.installation=$RW_OWNER" > "$RW_TMP/doctor-ids" || rw_die 'Cannot list owned containers.'
+    mapfile -t ids < "$RW_TMP/doctor-ids"
+    (( ${#ids[@]} )) || rw_die 'No owned containers are running.'
+    docker inspect --format '{{.Id}} {{index .Config.Labels "com.docker.compose.service"}} {{.State.Status}} {{with index .State "Health"}}{{.Status}}{{else}}none{{end}}' "${ids[@]}" > "$RW_TMP/doctor-states" || rw_die 'Cannot inspect container health.'
+    local health
+    while read -r id service state health; do
         [[ $state == running ]] || rw_die "Service $service is in state $state."
+        state=$health
         for ((attempts=0; attempts<60; attempts++)); do
-            state=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$id")
             [[ $state == starting ]] || break
             sleep 2
+            state=$(docker inspect --format '{{with index .State "Health"}}{{.Status}}{{else}}none{{end}}' "$id")
         done
         [[ $state == healthy || $state == none ]] || rw_die "Healthcheck $service: $state."
-    done < <(docker ps -aq --filter "label=io.pdm.remnawave.installation=$RW_OWNER")
+    done < "$RW_TMP/doctor-states"
     if [[ $RW_ROLE != node ]]; then
-        rw_wait_panel; rw_panel_login
+        rw_wait_panel
         rw_tokens_status > "$RW_TMP/doctor-tokens.jsonl" || rw_die 'Panel tokens need recovery: run rwctl tokens rotate.'
         rw_mfa_status > "$RW_TMP/doctor-mfa.json"
         while IFS= read -r node_uuid; do
-            for ((attempts=0; attempts<30; attempts++)); do
-                rw_api GET "/api/nodes/$node_uuid" '' "$RW_TMP/node-health.json" && jq -e '.response.isConnected==true and .response.isDisabled==false and .response.xrayUptime>0' "$RW_TMP/node-health.json" >/dev/null && break
-                sleep 2
-            done
-            jq -e '.response.isConnected==true and .response.isDisabled==false and .response.xrayUptime>0' "$RW_TMP/node-health.json" >/dev/null || rw_die 'The panel did not confirm a connected node and running Xray.'
+            rw_wait_node "$node_uuid" "$RW_TMP/node-health.json"
         done < <(jq -r '.nodes[].node_uuid' "$RW_OUT/inventory.json")
     fi
     jq -n --arg e "$RW_ENV" --arg role "$RW_ROLE" --slurpfile tokens "$RW_TMP/doctor-tokens.jsonl" --slurpfile mfa "$RW_TMP/doctor-mfa.json" '{schema_version:1,environment_id:$e,role:$role,containers_running:true,client_acceptance_required:true,tokens:$tokens,mfa:$mfa[0]}'
 }
 rw_resource_plan() {
-    local kind=$1 command=$2 expression=$3 id owner
-    while IFS= read -r id; do
-        [[ -n $id ]] || continue
-        owner=$(docker inspect --type "$kind" --format "$expression" "$id")
-        [[ $owner == "$RW_OWNER" ]] || rw_die 'The Docker resource belongs to another installation.'
-        printf '%s\n' "$id"
-    done < <(docker "$command" ls -q --filter "label=com.docker.compose.project=$RW_PROJECT")
+    local kind=$1
+    local -a ids=()
+    docker "$kind" ls -q --filter "label=com.docker.compose.project=$RW_PROJECT" > "$RW_TMP/$kind-ids" || rw_die 'Cannot list Docker resources.'
+    mapfile -t ids < "$RW_TMP/$kind-ids"
+    (( ${#ids[@]} )) || return 0
+    docker inspect --type "$kind" --format '{{json .Labels}}' "${ids[@]}" > "$RW_TMP/$kind-labels.jsonl" || rw_die 'Cannot inspect Docker resources.'
+    jq -se --arg owner "$RW_OWNER" --argjson count "${#ids[@]}" 'length==$count and all(.[]; .["io.pdm.remnawave.installation"]==$owner)' "$RW_TMP/$kind-labels.jsonl" >/dev/null || rw_die 'The Docker resource belongs to another installation.'
+    printf '%s\n' "${ids[@]}" | LC_ALL=C sort
 }
 rw_uninstall() {
     rw_owned
@@ -2367,8 +759,8 @@ rw_uninstall() {
         docker info >/dev/null 2>&1 || rw_die 'Docker is unavailable; installation files were retained.'
         rw_docker_ownership
         docker ps -aq --filter "label=io.pdm.remnawave.installation=$RW_OWNER" | jq -Rn '[inputs|select(length>0)]' > "$RW_TMP/containers.json"
-        rw_resource_plan network network '{{index .Labels "io.pdm.remnawave.installation"}}' > "$RW_TMP/networks"
-        rw_resource_plan volume volume '{{index .Labels "io.pdm.remnawave.installation"}}' > "$RW_TMP/volumes"
+        rw_resource_plan network > "$RW_TMP/networks"
+        rw_resource_plan volume > "$RW_TMP/volumes"
     fi
     rw_verify_files
     if [[ ${RW_DRY_RUN:-0} == 1 ]]; then
@@ -2386,6 +778,9 @@ rw_uninstall() {
         docker ps -aq --filter "label=io.pdm.remnawave.installation=$RW_OWNER" | jq -Rn '[inputs|select(length>0)]|sort' > "$RW_TMP/current-containers.json"
         jq 'sort' "$RW_TMP/containers.json" > "$RW_TMP/planned-containers.json"
         cmp -s "$RW_TMP/current-containers.json" "$RW_TMP/planned-containers.json" || rw_die 'The container inventory changed after confirmation.'
+        rw_resource_plan network > "$RW_TMP/current-networks"
+        rw_resource_plan volume > "$RW_TMP/current-volumes"
+        cmp -s "$RW_TMP/networks" "$RW_TMP/current-networks" && cmp -s "$RW_TMP/volumes" "$RW_TMP/current-volumes" || rw_die 'The network or volume inventory changed after confirmation.'
     fi
     if [[ -f $RW_OUT/private/security-state.json && $(jq -r '.status' "$RW_OUT/private/security-state.json") == armed ]]; then
         rw_security_revert
@@ -2407,11 +802,16 @@ rw_uninstall() {
         docker exec "$container" caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null
     fi
     local id
-    while IFS= read -r id; do docker stop -t 30 "$id" >/dev/null; docker rm "$id" >/dev/null; done < <(jq -r '.[]' "$RW_TMP/containers.json")
+    local -a containers=()
+    mapfile -t containers < <(jq -r '.[]' "$RW_TMP/containers.json")
+    if (( ${#containers[@]} )); then
+        docker stop -t 30 "${containers[@]}" >/dev/null
+        docker rm "${containers[@]}" >/dev/null
+    fi
     while IFS= read -r id; do [[ -z $id ]] || docker network rm "$id" >/dev/null; done < "$RW_TMP/networks"
     if [[ ${RW_PURGE:-0} == 1 ]]; then while IFS= read -r id; do [[ -z $id ]] || docker volume rm "$id" >/dev/null; done < "$RW_TMP/volumes"; fi
     if [[ $(jq -r '.ufw_rules_added // false' "$RW_OUT/manifest.json") == true ]]; then
-        while IFS= read -r id; do ufw --force delete "$id" >/dev/null; done < <(ufw status numbered | awk -v tag="# $RW_PROJECT" 'index($0,tag) {gsub(/[][]/,"",$1);print $1}' | sort -rn)
+        rw_security_remove_rules
     fi
     if [[ $(jq -r '.firewall_installed // false' "$RW_OUT/manifest.json") == true ]]; then
         local unit=/etc/systemd/system/$RW_PROJECT-firewall.service
@@ -2470,13 +870,9 @@ rw_node_attach() {
     RW_MUTATING=1
     rw_register_node "$RW_TMP/node-config.json" "$RW_TMP/connection.json" "$(jq -r '.management_address' "$RW_TMP/node-config.json")" "$RW_TMP/remote-profile.json"
     ssh "${ssh_options[@]}" "$host" "${prefix}bash '$remote/rwctl' node receive --output '$remote'" < "$RW_TMP/connection.json"
-    local uuid attempt
+    local uuid
     uuid=$(jq -er '.node_uuid' "$RW_TMP/connection.json")
-    for ((attempt=0; attempt<30; attempt++)); do
-        rw_api GET "/api/nodes/$uuid" '' "$RW_TMP/attached-node.json" && jq -e '.response.isConnected==true and .response.isDisabled==false and .response.xrayUptime>0' "$RW_TMP/attached-node.json" >/dev/null && break
-        sleep 2
-    done
-    jq -e '.response.isConnected==true and .response.isDisabled==false and .response.xrayUptime>0' "$RW_TMP/attached-node.json" >/dev/null || rw_die 'The panel did not confirm a connected node and running Xray.'
+    rw_wait_node "$uuid" "$RW_TMP/attached-node.json"
     rw_info 'Node attached. Existing users were not granted access automatically.'
 }
 rw_node_receive() {
@@ -2486,454 +882,6 @@ rw_node_receive() {
     cat > "$RW_TMP/received-connection.json"
     RW_CONNECTION=$RW_TMP/received-connection.json
     rw_apply; rw_track_files
-}
-# shellcheck shell=bash
-rw_archive_check() {
-    local archive=$1 names=$RW_TMP/tar-names types=$RW_TMP/tar-types path normalized size free
-    [[ -f $archive && ! -L $archive ]] || rw_die 'The archive must be a regular file.'
-    tar --absolute-names -tzf "$archive" > "$names" || rw_die 'The archive is damaged.'
-    tar --absolute-names -tvzf "$archive" > "$types" || rw_die 'Cannot verify archive entry types.'
-    awk 'substr($0,1,1)!="-" && substr($0,1,1)!="d" {exit 1}' "$types" || rw_die 'Links and special files are forbidden in the archive.'
-    : > "$RW_TMP/tar-normalized"
-    while IFS= read -r path; do
-        [[ $path =~ ^[A-Za-z0-9_./@+:-]+$ && $path != /* && $path != *$'\r'* ]] || rw_die 'Unsafe archive entry name.'
-        normalized=$path
-        while [[ $normalized == ./* ]]; do normalized=${normalized#./}; done
-        normalized=${normalized%/}
-        [[ $normalized != .. && $normalized != ../* && $normalized != */../* && $normalized != */.. ]] || rw_die 'Archive path traversal detected.'
-        [[ $normalized != *//* && $normalized != */./* && $normalized != */. ]] || rw_die 'Ambiguous archive path.'
-        printf '%s\n' "$normalized" >> "$RW_TMP/tar-normalized"
-    done < "$names"
-    [[ -z $(LC_ALL=C sort "$RW_TMP/tar-normalized" | uniq -d) ]] || rw_die 'Duplicate archive paths.'
-    size=$(awk '{sum+=$3} END {printf "%.0f",sum}' "$types")
-    free=$(df -PB1 "$RW_TMP" | awk 'NR==2 {print $4}')
-    (( free > size + 134217728 )) || rw_die 'Insufficient disk space to extract the archive.'
-}
-rw_versions_check() {
-    jq -e '
-      .schema_version==1 and (.components|keys)==["caddy_auth","node","panel","postgres","subscription","valkey"] and
-      ([.components|to_entries[]|(.key as $key|.value.image|type=="string" and test(
-        (if $key=="panel" then "^remnawave/backend" elif $key=="node" then "^remnawave/node"
-         elif $key=="postgres" then "^(library/)?postgres" elif $key=="valkey" then "^valkey/valkey"
-         elif $key=="caddy_auth" then "^remnawave/caddy-with-auth" else "^remnawave/subscription-page" end)+"@sha256:[a-f0-9]{64}$"))]|all) and
-      (.components.postgres.source_tag|type=="string" and test("^[0-9]+\\.[0-9]+$"))' "$1" >/dev/null || rw_die 'Pinned official image digests and a PostgreSQL version are required.'
-}
-rw_backup_open() {
-    local archive=$1 expected path sum source
-    [[ -f $archive && ! -L $archive ]] || rw_die 'Backup must be a regular file, not a symbolic link.'
-    archive=$(realpath -e -- "$archive")
-    [[ -f $archive.sha256 && ! -L $archive.sha256 ]] || rw_die 'A .sha256 checksum file is required beside the backup.'
-    expected=$(awk 'NR==1 {print $1}' "$archive.sha256")
-    [[ $expected =~ ^[a-fA-F0-9]{64}$ && $(wc -l < "$archive.sha256") == 1 ]] || rw_die 'Invalid backup checksum file.'
-    [[ $(sha256sum "$archive" | cut -d' ' -f1) == "${expected,,}" ]] || rw_die 'Backup checksum mismatch.'
-    rw_archive_check "$archive"
-    RW_BACKUP=$(mktemp -d "$RW_TMP/recovery.XXXXXX")
-    tar -xzf "$archive" --no-same-owner --no-same-permissions -C "$RW_BACKUP"
-    source=$RW_BACKUP/installation
-    [[ -f $source/config.json && -f $source/manifest.json && -f $source/private/secrets.json ]] || rw_die 'Backup does not contain an installation.'
-    jq -e '.schema_version==2 and .implementation=="bash-docker" and (.managed_files|type=="array")' "$source/manifest.json" >/dev/null || rw_die 'Incompatible backup manifest.'
-    while IFS=$'\t' read -r path sum; do
-        [[ $path =~ ^[A-Za-z0-9_./-]+$ && $path != /* && $path != *'..'* && $sum =~ ^[a-f0-9]{64}$ ]] || rw_die 'Unsafe backup manifest.'
-        [[ -f $source/$path && $(sha256sum "$source/$path" | cut -d' ' -f1) == "$sum" ]] || rw_die "Damaged backup file: $path"
-    done < <(jq -r '.managed_files[]|[.path,.sha256]|@tsv' "$source/manifest.json")
-    rw_versions_check "$source/versions.lock.json"
-    if jq -e '.stats.enabled==true' "$source/manifest.json" >/dev/null; then
-        rw_stats_secrets_check "$source/private/stats.json" "$(jq -r '.api_namespace_owner // .ownership_label' "$source/manifest.json")"
-        jq -e '.stats.schema_version==1 and (.stats.port|type=="number" and .==floor and .>=1024 and .<=65535)' "$source/manifest.json" >/dev/null || rw_die 'Incompatible statistics manifest.'
-    fi
-    jq -e '
-      ([.app_secret,.postgres_password,.metrics_password,.webhook_secret,.auth_password]|all(type=="string" and test("^[a-f0-9]{64}$"))) and
-      (.admin_password|type=="string" and test("^Aa1[a-f0-9]{64}$")) and
-      ([.reality_private,.reality_public]|all(type=="string" and test("^[A-Za-z0-9_-]{43}$"))) and
-      (.short_id|test("^[a-f0-9]{16}$")) and (.xhttp_path|test("^/[a-f0-9]{32}$"))' "$source/private/secrets.json" >/dev/null || rw_die 'Incompatible backup secrets.'
-    for path in caddy_data caddy_config; do rw_archive_check "$RW_BACKUP/$path.tgz"; done
-    if [[ $(jq -r '.role' "$source/config.json") != panel ]]; then
-        grep -vEx 'NODE_PORT=[0-9]+|SECRET_KEY=[A-Za-z0-9+/=_-]+' "$source/private/node.env" > "$RW_TMP/bad-node-env" || true
-        [[ ! -s $RW_TMP/bad-node-env && $(grep -c '^NODE_PORT=' "$source/private/node.env") == 1 && $(grep -c '^SECRET_KEY=' "$source/private/node.env") -le 1 ]] || rw_die 'Invalid node.env in the backup.'
-        [[ $(sed -n 's/^NODE_PORT=//p' "$source/private/node.env") == $(jq -r '.ports.node_api' "$source/config.json") ]] || rw_die 'The node.env port does not match the configuration.'
-    fi
-    RW_BACKUP_SHA=${expected,,}
-}
-rw_restore_config() {
-    local requested=${RW_CONFIG:-} source=$RW_BACKUP/installation normalized
-    rw_config_filter > "$RW_TMP/config.jq"
-    jq -ef "$RW_TMP/config.jq" "$source/config.json" > "$RW_TMP/source-config.json" || rw_die 'Invalid backup configuration.'
-    if [[ -n $requested ]]; then
-        jq -ef "$RW_TMP/config.jq" "$requested" > "$RW_TMP/target-config.json" || rw_die 'Invalid restore configuration.'
-        # IP/DNS ownership and the existing proxy may differ on a replacement host.
-        for normalized in source target; do jq 'del(.public_addresses,.panel_addresses,.existing_caddy)' "$RW_TMP/$normalized-config.json" > "$RW_TMP/$normalized-comparable.json"; done
-        cmp -s "$RW_TMP/source-comparable.json" "$RW_TMP/target-comparable.json" || rw_die 'Restore must preserve installation name, role, domains, ports and subnet; only addresses and existing_caddy may change.'
-    else requested=$RW_TMP/source-config.json; fi
-    rw_config_load "$requested"
-    [[ $(jq -r '.environment_id' "$source/manifest.json") == "$RW_ENV" ]] || rw_die 'Backup installation name does not match the configuration.'
-}
-rw_restore_files() {
-    local source=$RW_BACKUP/installation path
-    if [[ -f $RW_OUT/manifest.json ]]; then
-        rw_owned
-        jq -e --arg sha "$RW_BACKUP_SHA" '.status=="restoring" and .restore_archive_sha256==$sha' "$RW_OUT/manifest.json" >/dev/null || rw_die 'Restore requires an empty installation or continuation of the same restore; an existing system will not be overwritten.'
-    else [[ ! -d $RW_OUT || -z $(find "$RW_OUT" -mindepth 1 -maxdepth 1 -print -quit) ]] || rw_die 'The restore directory is not empty.'; fi
-    rw_lock; RW_MUTATING=1
-    if [[ ! -f $RW_OUT/manifest.json ]]; then
-        jq --arg owner "$RW_OWNER" --arg fp "$RW_FINGERPRINT" --arg sha "$RW_BACKUP_SHA" \
-          '.api_namespace_owner //= .ownership_label | .ownership_label=$owner | .config_fingerprint=$fp | .status="restoring" | .restore_archive_sha256=$sha | .firewall_installed=false | .ufw_rules_added=false | .existing_caddy_updated=false | .managed_files=[] | del(.ssh,.security)' "$source/manifest.json" | rw_atomic "$RW_OUT/manifest.json"
-    fi
-    rw_resume_writes
-    while IFS= read -r path; do
-        [[ $path != rwctl && $path != compose.json && $path != config.json && $path != private/.managed-paths && $path != private/ssh-* && $path != private/security-* && $path != private/ufw-before/* && $path != plugins/stats/* && $path != private/stats.env && $path != private/stats.token ]] || continue
-        cat "$source/$path" | rw_atomic "$RW_OUT/$path"
-    done < <(jq -r '.managed_files[].path' "$source/manifest.json")
-    # Never execute archived shell code or trust an archived Compose with host mounts.
-    cat "$RW_CFG" | rw_atomic "$RW_OUT/config.json"
-    if [[ $RW_ROLE != node ]]; then
-        local token=$source/private/subscription.token
-        [[ -s $token ]] && grep -qxE '[A-Za-z0-9._=+/-]+' "$token" || rw_die 'A verified subscription API token is missing from the backup.'
-        { printf 'APP_PORT=3010\nREMNAWAVE_PANEL_URL=http://rw_panel:3000\nREMNAWAVE_API_TOKEN='; cat "$token"; printf '\nTRUST_PROXY=1\n'; } | rw_atomic "$RW_OUT/private/subscription.env"
-    fi
-    rw_render_compose; rw_render_env; rw_render_caddy; rw_stats_assets; rw_install_ctl
-    rw_track_files
-}
-rw_stop_writers() {
-    local -a services=()
-    mapfile -t services < <(jq -r '.services|keys[]|select(.!="rw_db" and .!="rw_valkey")' "$RW_OUT/compose.json")
-    rw_compose --profile public --profile node stop "${services[@]}" || rw_die 'Cannot stop writer services.'
-}
-rw_restore_data() {
-    local backup=$1 name image volume
-    rw_docker_ownership
-    rw_compose --profile public --profile node create || rw_die 'Cannot create restore containers.'
-    image=$(jq -r '.components.caddy_auth.image' "$RW_OUT/versions.lock.json")
-    for name in caddy_data caddy_config; do
-        volume=${RW_PROJECT}_$name
-        [[ $(docker volume inspect "$volume" --format '{{index .Labels "io.pdm.remnawave.installation"}}') == "$RW_OWNER" ]] || rw_die 'The restore volume belongs to another installation.'
-        rw_archive_check "$backup/$name.tgz"
-        # Only this validated, stopped volume is replaced; no host paths are mounted.
-        docker run --rm --network none --cap-drop ALL --entrypoint sh --mount "type=volume,src=$volume,dst=/data" "$image" -c 'find /data -mindepth 1 -delete' || rw_die 'Cannot clear the owned Caddy volume.'
-        docker run --rm -i --network none --cap-drop ALL --entrypoint tar --mount "type=volume,src=$volume,dst=/data" "$image" -C /data --no-same-owner --no-same-permissions -xzf - < "$backup/$name.tgz" || rw_die 'Cannot restore the Caddy volume.'
-    done
-    if [[ $RW_ROLE != node ]]; then
-        [[ -s $backup/database.dump ]] || rw_die 'The PostgreSQL dump is missing.'
-        rw_compose up -d --wait --wait-timeout 180 rw_db rw_valkey || rw_die 'The restore database or cache did not start.'
-        rw_compose exec -T rw_db pg_restore --list < "$backup/database.dump" >/dev/null || rw_die 'Invalid PostgreSQL dump.'
-        rw_stats_roles
-        # pg_restore --clean alone leaves objects introduced by a failed migration.
-        # Writers are stopped; replace only this installation's database completely.
-        rw_compose exec -T rw_db dropdb --if-exists --force -U postgres remnawave || rw_die 'Cannot recreate the owned database.'
-        rw_compose exec -T rw_db createdb -U postgres -T template0 remnawave || rw_die 'Cannot create the restore database.'
-        rw_compose exec -T rw_db pg_restore --exit-on-error --single-transaction -U postgres -d remnawave < "$backup/database.dump" || rw_die 'PostgreSQL restore did not complete.'
-        rw_stats_sql
-    fi
-}
-rw_start_existing() {
-    if [[ $RW_ROLE != node ]]; then rw_compose up -d --wait --wait-timeout 180 rw_db rw_valkey rw_panel || rw_die 'The panel failed to start.'; rw_wait_panel; rw_panel_login; fi
-    rw_compose --profile public up -d rw_caddy || rw_die 'Caddy failed to start.'
-    if [[ $RW_ROLE != node ]]; then rw_compose --profile public up -d rw_subscription || rw_die 'The subscription page failed to start.'; fi
-    if rw_stats_enabled; then rw_compose --profile public up -d --wait --wait-timeout 90 rw_stats || rw_die 'The statistics API failed to start.'; fi
-    if [[ $RW_ROLE != panel ]] && grep -q '^SECRET_KEY=' "$RW_OUT/private/node.env"; then rw_compose --profile node up -d rw_node || rw_die 'The node failed to start.'; fi
-    rw_doctor
-}
-rw_restore() {
-    [[ -n ${RW_ARCHIVE:-} ]] || rw_die 'restore requires --archive FILE.'
-    rw_backup_open "$RW_ARCHIVE"; rw_restore_config
-    if (( RW_DRY_RUN )); then
-        jq -n --arg e "$RW_ENV" --arg dir "$RW_OUT" --arg sha "$RW_BACKUP_SHA" '{environment_id:$e,directory:$dir,archive_sha256:$sha,archive_verified:true,read_only:true}'; return
-    fi
-    rw_root; rw_os; rw_deps; rw_docker_install
-    RW_STATS_SOURCE_MANIFEST=$RW_BACKUP/installation/manifest.json
-    rw_preflight
-    RW_STATS_SOURCE_MANIFEST=
-    rw_restore_files
-    rw_compose --profile public --profile node pull
-    rw_stats_patch
-    rw_stop_writers; rw_restore_data "$RW_BACKUP"
-    rw_firewall; rw_existing_caddy_apply
-    rw_start_existing
-    rw_manifest_set '.status="running-awaiting-acceptance"|.restored_at_utc=(now|strftime("%Y-%m-%dT%H:%M:%SZ"))'
-    rw_install_summary
-    rw_track_files
-    rw_info 'Restore complete: keys, API IDs, database, MFA and certificates preserved.'
-}
-# shellcheck shell=bash
-rw_upgrade_candidate() {
-    local file=${RW_VERSION_FILE:-} old_major new_major key
-    if [[ -n $file ]]; then cat "$file" > "$RW_TMP/upgrade-versions.json"; else rw_versions > "$RW_TMP/upgrade-versions.json"; fi
-    rw_versions_check "$RW_TMP/upgrade-versions.json"
-    case ${RW_COMPONENT:-all} in
-        all) :;;
-        panel|subscription) [[ $RW_ROLE != node ]] || rw_die 'This installation has no panel or subscription component.'; key=$RW_COMPONENT;;
-        node) [[ $RW_ROLE != panel ]] || rw_die 'This installation has no node component.'; key=node;;
-        caddy) key=caddy_auth;;
-        *) rw_die '--component must be all, panel, node, caddy or subscription.';;
-    esac
-    if [[ -n ${key:-} ]]; then
-        jq --arg key "$key" --slurpfile candidate "$RW_TMP/upgrade-versions.json" '.components[$key]=$candidate[0].components[$key]' "$RW_OUT/versions.lock.json" > "$RW_TMP/component-versions.json"
-        mv "$RW_TMP/component-versions.json" "$RW_TMP/upgrade-versions.json"
-    fi
-    old_major=$(jq -r '.components.postgres.source_tag|split(".")[0]' "$RW_OUT/versions.lock.json")
-    new_major=$(jq -r '.components.postgres.source_tag|split(".")[0]' "$RW_TMP/upgrade-versions.json")
-    [[ $old_major == "$new_major" ]] || rw_die 'Changing the PostgreSQL major version requires a separate data migration.'
-    jq -e --slurpfile old "$RW_OUT/versions.lock.json" '(.components.postgres.source_tag|split(".")|map(tonumber)) >= ($old[0].components.postgres.source_tag|split(".")|map(tonumber))' "$RW_TMP/upgrade-versions.json" >/dev/null || rw_die 'Downgrade PostgreSQL by restoring a backup, not by running upgrade.'
-    jq --arg e "$RW_ENV" '.environment_id=$e' "$RW_TMP/upgrade-versions.json" > "$RW_TMP/upgrade-lock.json"
-    rw_render_compose "$RW_TMP/upgrade-compose.json" "$RW_TMP/upgrade-lock.json"
-    docker compose --project-directory "$RW_OUT" --project-name "$RW_PROJECT" -f "$RW_TMP/upgrade-compose.json" --profile public --profile node config --quiet || rw_die 'Invalid upgrade Compose configuration.'
-}
-rw_upgrade_activate() {
-    cat "$RW_TMP/upgrade-lock.json" | rw_atomic "$RW_OUT/versions.lock.json" || rw_die 'Cannot write the upgrade version lock.'
-    cat "$RW_TMP/upgrade-compose.json" | rw_atomic "$RW_OUT/compose.json" || rw_die 'Cannot write the upgrade Compose configuration.'
-    rw_manifest_set '.status="upgrading"'
-    rw_track_files
-    if [[ ${RW_COMPONENT:-all} == node || ${RW_COMPONENT:-all} == subscription ]]; then
-        rw_compose --profile public --profile node up -d --no-deps --force-recreate --wait --wait-timeout 90 "rw_$RW_COMPONENT" || return 1
-        rw_doctor
-    else rw_start_existing; fi
-}
-rw_upgrade_component_rollback() {
-    # The panel kept accepting writes. Never restore its old database snapshot
-    # while rolling back a node or read-only subscription service.
-    cat "$RW_UPGRADE_SOURCE/versions.lock.json" | rw_atomic "$RW_OUT/versions.lock.json" || return 1
-    rw_render_compose || return 1
-    rw_compose --profile public --profile node up -d --no-deps --force-recreate --wait --wait-timeout 90 "rw_$RW_COMPONENT" || return 1
-    rw_doctor || return 1
-    rw_manifest_set '.status="running-awaiting-acceptance"|.last_upgrade="rolled-back"' || return 1
-    rw_track_files || return 1
-}
-rw_upgrade_rollback() {
-    local source=$RW_UPGRADE_SOURCE path
-    rw_stop_writers
-    # A failed addon activation may have introduced a service absent from the snapshot.
-    if ! jq -e '.stats.enabled==true' "$source/manifest.json" >/dev/null; then
-        local id
-        while IFS= read -r id; do
-            [[ -n $id ]] || continue
-            [[ $(docker inspect --format '{{index .Config.Labels "io.pdm.remnawave.installation"}}' "$id") == "$RW_OWNER" ]] || rw_die 'The statistics container belongs to another installation.'
-            docker rm -f "$id" >/dev/null
-        done < <(docker ps -aq --filter "label=io.pdm.remnawave.installation=$RW_OWNER" --filter label=com.docker.compose.service=rw_stats)
-    fi
-    while IFS= read -r path; do
-        [[ $path != rwctl && $path != private/.managed-paths ]] || continue
-        cat "$source/$path" | rw_atomic "$RW_OUT/$path" || rw_die 'Cannot restore a rollback file.'
-    done < <(jq -r '.managed_files[].path' "$source/manifest.json")
-    cat "$source/manifest.json" | rw_atomic "$RW_OUT/manifest.json"
-    rw_stats_assets; rw_stats_patch
-    rw_restore_data "${source%/installation}"
-    rw_start_existing
-    rw_install_ctl
-    rw_manifest_set '.status="running-awaiting-acceptance"|.last_upgrade="rolled-back"'
-    jq -n --arg archive "$RW_UPGRADE_ARCHIVE" '{status:"rolled-back",backup:$archive}' | rw_atomic "$RW_OUT/private/upgrade.json"
-    rw_track_files
-}
-rw_upgrade_abort() {
-    RW_UPGRADE_PENDING=0
-    if [[ ${RW_COMPONENT:-all} == node || ${RW_COMPONENT:-all} == subscription ]]; then
-        if (rw_upgrade_component_rollback > "$RW_TMP/rollback.log" 2>&1); then
-            rw_info 'Component upgrade failed; previous images restored without replacing panel data.'
-            return
-        fi
-        cat "$RW_TMP/rollback.log" | rw_atomic "$RW_OUT/private/rollback-error.log"
-        rw_manifest_set '.status="rollback-needs-attention"'
-        rw_info 'Component rollback failed; see private/rollback-error.log.'
-        return 1
-    fi
-    if (rw_upgrade_rollback > "$RW_TMP/rollback.log" 2>&1); then
-        rw_info 'Upgrade failed: previous images, database and Caddy were restored from backup.'
-    else
-        cat "$RW_TMP/rollback.log" | rw_atomic "$RW_OUT/private/rollback-error.log"
-        rw_manifest_set '.status="rollback-needs-attention"'
-        rw_info "Automatic rollback did not complete. Backup: $RW_UPGRADE_ARCHIVE; diagnostics: private/rollback-error.log."
-        return 1
-    fi
-}
-rw_upgrade() {
-    rw_owned; rw_verify_files; rw_ssh_idle; rw_versions_check "$RW_OUT/versions.lock.json"
-    rw_upgrade_candidate
-    if (( RW_DRY_RUN )); then
-        jq -n --arg component "${RW_COMPONENT:-all}" --slurpfile old "$RW_OUT/versions.lock.json" --slurpfile new "$RW_TMP/upgrade-lock.json" '{component:$component,before:($old[0].components|map_values(.image)),after:($new[0].components|map_values(.image)),backup_required:true,rollback_includes_database:($component!="node" and $component!="subscription"),read_only:true}'; return
-    fi
-    rw_root; rw_os; rw_docker_ownership; rw_resource_checks; rw_lock
-    if [[ $RW_ROLE != node && $(jq -r '.components.panel.image' "$RW_OUT/versions.lock.json") != $(jq -r '.components.panel.image' "$RW_TMP/upgrade-lock.json") ]]; then
-        [[ $(rw_compose exec -T rw_db psql -At -U postgres -d remnawave -c "SELECT EXISTS(SELECT FROM information_schema.schemata WHERE schema_name='pdm_stats')") == f ]] || rw_die 'Updating a panel with pdm_stats requires a verified statistics migration.'
-    fi
-    docker compose --project-directory "$RW_OUT" --project-name "$RW_PROJECT" -f "$RW_TMP/upgrade-compose.json" --profile public --profile node pull || rw_die 'Upgrade images could not be pulled; current services were not stopped.'
-    # Validate against isolated Caddy stores; a candidate cannot migrate live MFA state before backup.
-    local validation
-    validation=$(mktemp -d "$RW_TMP/validation.XXXXXX")
-    mkdir "$validation/data" "$validation/config" || rw_die 'Cannot create isolated validation storage.'
-    jq --arg data "$validation/data" --arg config "$validation/config" '.services.rw_caddy.network_mode="none" | .services.rw_caddy.volumes|=map(if startswith("caddy_data:") then $data+":/data" elif startswith("caddy_config:") then $config+":/config" else . end)' "$RW_TMP/upgrade-compose.json" > "$RW_TMP/validate-compose.json"
-    docker compose --project-directory "$RW_OUT" --project-name "$RW_PROJECT" -f "$RW_TMP/validate-compose.json" --profile public run --rm --no-deps --entrypoint caddy rw_caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile > "$RW_TMP/candidate-validation.log" 2>&1 || rw_die 'Candidate Caddy validation failed; the current stack was not stopped.'
-    RW_MUTATING=1
-    # Freeze writers for a rollback point that does not discard concurrent user edits.
-    if [[ ${RW_COMPONENT:-all} != node && ${RW_COMPONENT:-all} != subscription ]]; then rw_stop_writers; fi
-    RW_UPGRADE_ARCHIVE=${RW_ARCHIVE:-/var/backups/pdm-remnawave/$RW_ENV-pre-upgrade-$(date -u +%Y%m%dT%H%M%SZ).tgz}
-    RW_ARCHIVE=$RW_UPGRADE_ARCHIVE
-    if ! (rw_backup > "$RW_TMP/upgrade-backup.log" 2>&1); then
-        if [[ ${RW_COMPONENT:-all} != node && ${RW_COMPONENT:-all} != subscription ]]; then (rw_start_existing) || true; fi
-        rw_die 'Upgrade backup failed; the previous stack remains active.'
-    fi
-    rw_backup_open "$RW_UPGRADE_ARCHIVE"
-    RW_UPGRADE_SOURCE=$RW_BACKUP/installation
-    RW_UPGRADE_PENDING=1
-    if (rw_upgrade_activate > "$RW_TMP/upgrade-activate.log" 2>&1); then
-        RW_UPGRADE_PENDING=0
-        rw_manifest_set '.status="running-awaiting-acceptance"|.last_upgrade="verified"'
-        rw_install_ctl
-        jq -n --arg archive "$RW_UPGRADE_ARCHIVE" '{status:"verified",backup:$archive}' | rw_atomic "$RW_OUT/private/upgrade.json"
-        rw_track_files
-        rw_info "Upgrade verified. Rollback backup: $RW_UPGRADE_ARCHIVE"
-    else
-        cat "$RW_TMP/upgrade-activate.log" | rw_atomic "$RW_OUT/private/upgrade-error.log"
-        rw_upgrade_abort
-        rw_die 'Candidate acceptance failed; rollback completed.'
-    fi
-}
-rw_rollback() {
-    [[ -n ${RW_ARCHIVE:-} ]] || rw_die 'rollback requires --archive FILE.'
-    rw_owned; rw_verify_files
-    rw_backup_open "$RW_ARCHIVE"
-    local source=$RW_BACKUP/installation destination=$RW_OUT archive=$RW_ARCHIVE safety
-    jq -e --arg owner "$RW_OWNER" --arg env "$RW_ENV" '.ownership_label==$owner and .environment_id==$env' "$source/manifest.json" >/dev/null || rw_die 'The rollback backup belongs to another installation.'
-    jq -Sc . "$RW_CFG" > "$RW_TMP/rollback-current-config.json"
-    jq -Sc . "$source/config.json" > "$RW_TMP/rollback-source-config.json"
-    cmp -s "$RW_TMP/rollback-current-config.json" "$RW_TMP/rollback-source-config.json" || rw_die 'Rollback backup configuration does not match this installation.'
-    [[ $(jq -r '.components.postgres.source_tag|split(".")[0]' "$source/versions.lock.json") == $(jq -r '.components.postgres.source_tag|split(".")[0]' "$RW_OUT/versions.lock.json") ]] || rw_die 'PostgreSQL major version differs in the rollback backup.'
-    if (( RW_DRY_RUN )); then jq -n --arg archive "$archive" '{backup:$archive,database_replaced:true,safety_backup_required:true,read_only:true}'; return; fi
-    rw_root; rw_os; rw_docker_ownership; rw_lock
-    rw_stop_writers
-    safety=/var/backups/pdm-remnawave/$RW_ENV-pre-rollback-$(date -u +%Y%m%dT%H%M%SZ).tgz
-    RW_ARCHIVE=$safety
-    if ! (rw_backup); then (rw_start_existing) || true; rw_die 'The pre-rollback snapshot was not created.'; fi
-    RW_OUT=$destination; RW_UPGRADE_SOURCE=$source; RW_UPGRADE_ARCHIVE=$archive
-    RW_MUTATING=1
-    if (rw_upgrade_rollback > "$RW_TMP/manual-rollback.log" 2>&1); then
-        rw_info "Rollback verified. Pre-rollback snapshot: $safety"
-    else
-        cat "$RW_TMP/manual-rollback.log" | rw_atomic "$RW_OUT/private/rollback-error.log"
-        rw_manifest_set '.status="rollback-needs-attention"'
-        rw_die "Rollback did not complete. Pre-operation snapshot: $safety"
-    fi
-}
-# shellcheck shell=bash
-rw_stats_enabled() { [[ -f ${RW_STATS_SOURCE_MANIFEST:-$RW_OUT/manifest.json} ]] && jq -e '.stats.enabled==true' "${RW_STATS_SOURCE_MANIFEST:-$RW_OUT/manifest.json}" >/dev/null; }
-rw_stats_port() { jq -er '.stats.port|select(type=="number" and .==floor and .>=1024 and .<=65535)' "${RW_STATS_SOURCE_MANIFEST:-$RW_OUT/manifest.json}"; }
-rw_stats_version() {
-    [[ $RW_ROLE != node && $(jq -r '.components.panel.image' "$1") == remnawave/backend@sha256:b16d724b90fd7c9fec2df04bd28938a671cafc62894105068e11550ee3449c56 ]] || rw_die 'The statistics addon requires the verified Panel 3.4.5 image and a panel role.'
-}
-rw_stats_secrets_check() {
-    local file=$1 owner=$2
-    jq -e --arg owner "$owner" '
-      .schema_version==1 and .api_namespace_owner==$owner and
-      (keys==["api_namespace_owner","api_token","reader_password","schema_version"]) and
-      ([.api_token,.reader_password,.api_namespace_owner]|all(type=="string" and test("^[a-f0-9]{64}$")))' "$file" >/dev/null || rw_die 'Invalid statistics addon secrets or namespace.'
-}
-rw_stats_assets() {
-    rw_stats_enabled || return 0
-    rw_stats_version "$RW_OUT/versions.lock.json"
-    local namespace
-    namespace=$(jq -r '.api_namespace_owner // .ownership_label' "$RW_OUT/manifest.json")
-    rw_stats_secrets_check "$RW_OUT/private/stats.json" "$namespace"
-    rw_stats_hook | rw_atomic "$RW_OUT/plugins/stats/panel-hook.cjs"
-    rw_stats_server | rw_atomic "$RW_OUT/plugins/stats/server.cjs"
-    jq -r .api_token "$RW_OUT/private/stats.json" | rw_atomic "$RW_OUT/private/stats.token"
-    jq -r '"DATABASE_URL=postgresql://pdm_stats_api:"+.reader_password+"@rw_db:5432/remnawave?connection_limit=1&pool_timeout=2\nPDM_STATS_TOKEN_FILE=/run/secrets/stats-token\nPDM_STATS_PORT=13100\nNODE_OPTIONS=--max-old-space-size=32"' "$RW_OUT/private/stats.json" | rw_atomic "$RW_OUT/private/stats.env"
-}
-rw_stats_compose() {
-    local target=$1 versions=$2
-    rw_stats_enabled || return 0
-    rw_stats_version "$versions"
-    local port image
-    port=$(rw_stats_port) || rw_die 'Invalid statistics API port.'
-    [[ $(jq -r --argjson port "$port" '.ports|[.[]]|index($port)' "$RW_CFG") == null ]] || rw_die 'The statistics API port conflicts with an installation port.'
-    image=$(jq -r '.components.panel.image' "$versions")
-    jq --arg image "$image" --arg owner "$RW_OWNER" --argjson port "$port" --arg profile "$(rw_cfg '.resources.profile')" '
-      (if $profile=="compact-test" then .services.rw_panel.environment.NODE_OPTIONS="--max-old-space-size=160" else . end) |
-      .services.rw_panel.volumes += ["./plugins/stats/processors.patched.js:/opt/app/dist/processors.js:ro","./plugins/stats/panel-hook.cjs:/opt/pdm-stats/panel-hook.cjs:ro"] |
-      .services.rw_stats={image:$image,entrypoint:["node","/opt/pdm-stats/server.cjs"],restart:"unless-stopped",
-        mem_limit:100663296,memswap_limit:100663296,cpus:0.15,read_only:true,cap_drop:["ALL"],
-        security_opt:["no-new-privileges:true"],tmpfs:["/tmp:size=32m,mode=1777"],
-        env_file:[{path:"private/stats.env",format:"raw"}],profiles:["public"],ports:[("127.0.0.1:"+($port|tostring)+":13100")],
-        volumes:["./plugins/stats/server.cjs:/opt/pdm-stats/server.cjs:ro","./private/stats.token:/run/secrets/stats-token:ro"],
-        labels:{"io.pdm.remnawave.installation":$owner},logging:{driver:"json-file",options:{"max-size":"5m","max-file":"2"}},
-        depends_on:{rw_db:{condition:"service_healthy"}},
-        healthcheck:{test:["CMD","node","-e","const fs=require(\"fs\"),http=require(\"http\");const r=http.get(\"http://127.0.0.1:13100/health\",{headers:{Authorization:\"Bearer \"+fs.readFileSync(process.env.PDM_STATS_TOKEN_FILE,\"utf8\").trim()}},s=>process.exit(s.statusCode===200?0:1));r.setTimeout(2500,()=>process.exit(1));r.on(\"error\",()=>process.exit(1));"],interval:"10s",timeout:"3s",retries:12,start_period:"20s"}}' "$target" | rw_atomic "$target"
-}
-rw_stats_patch() {
-    rw_stats_enabled || return 0
-    rw_stats_version "$RW_OUT/versions.lock.json"
-    local image
-    image=$(jq -r '.components.panel.image' "$RW_OUT/versions.lock.json")
-    rw_stats_patcher > "$RW_TMP/stats-patcher.cjs"
-    docker run --rm --network none --read-only --cap-drop ALL --entrypoint cat "$image" /opt/app/dist/processors.js > "$RW_TMP/processors.original.js"
-    docker run --rm --network none --memory 256m --memory-swap 256m --cpus 0.5 --cap-drop ALL --entrypoint node \
-      --mount "type=bind,src=$RW_TMP,dst=/work" "$image" /work/stats-patcher.cjs /work/processors.original.js /work/processors.patched.js || rw_die 'Statistics bundle SHA or syntax validation failed.'
-    rw_atomic "$RW_OUT/plugins/stats/processors.patched.js" < "$RW_TMP/processors.patched.js"
-}
-rw_stats_roles() {
-    rw_stats_enabled || return 0
-    local namespace exists comment password
-    namespace=$(jq -r '.api_namespace_owner // .ownership_label' "$RW_OUT/manifest.json")
-    rw_stats_secrets_check "$RW_OUT/private/stats.json" "$namespace"
-    IFS='|' read -r exists comment < <(rw_compose exec -T rw_db psql -At -U postgres -d postgres -c "SELECT EXISTS(SELECT 1 FROM pg_roles WHERE rolname='pdm_stats_api'),coalesce((SELECT shobj_description(oid,'pg_authid') FROM pg_roles WHERE rolname='pdm_stats_api'),'');")
-    [[ $exists == f || ( $exists == t && $comment == "pdm-remnawave:$namespace" ) ]] || rw_die 'PostgreSQL role pdm_stats_api is not owned by this addon.'
-    password=$(jq -r .reader_password "$RW_OUT/private/stats.json")
-    {
-        if [[ $exists == f ]]; then printf "CREATE ROLE pdm_stats_api LOGIN PASSWORD '%s';\n" "$password";
-        else printf "ALTER ROLE pdm_stats_api PASSWORD '%s';\n" "$password"; fi
-        printf "COMMENT ON ROLE pdm_stats_api IS 'pdm-remnawave:%s';\n" "$namespace"
-        printf 'ALTER ROLE pdm_stats_api NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;\nALTER ROLE pdm_stats_api SET default_transaction_read_only=on;\n'
-    } | rw_compose exec -T rw_db psql -q -v ON_ERROR_STOP=1 -U postgres -d postgres || rw_die 'The statistics role could not be prepared.'
-}
-rw_stats_sql() {
-    rw_stats_enabled || return 0
-    rw_stats_schema | rw_compose exec -T rw_db psql -q -v ON_ERROR_STOP=1 -U postgres -d remnawave || rw_die 'Statistics schema validation failed.'
-    printf 'GRANT CONNECT ON DATABASE remnawave TO pdm_stats_api;\nGRANT USAGE ON SCHEMA pdm_stats TO pdm_stats_api;\nREVOKE ALL ON ALL TABLES IN SCHEMA public,pdm_stats FROM pdm_stats_api;\nGRANT EXECUTE ON FUNCTION pdm_stats.status(),pdm_stats.usage(bigint,timestamptz,timestamptz) TO pdm_stats_api;\n' | rw_compose exec -T rw_db psql -q -v ON_ERROR_STOP=1 -U postgres -d remnawave || rw_die 'Statistics API permissions could not be configured.'
-}
-rw_stats_status() {
-    rw_owned; rw_stats_enabled || rw_die 'The statistics addon is not installed.'
-    rw_auth_header "$RW_OUT/private/stats.token"
-    curl -fsS --connect-timeout 3 --max-time 10 --config "$RW_AUTH_CONF" "http://127.0.0.1:$(rw_stats_port)/health" | jq .
-}
-rw_stats_install() {
-    rw_root; rw_os; rw_owned; rw_verify_files; rw_ssh_idle; rw_docker_ownership
-    rw_stats_version "$RW_OUT/versions.lock.json"
-    local port=${RW_STATS_PORT:-} namespace
-    if rw_stats_enabled; then
-        [[ -z $port || $port == "$(rw_stats_port)" ]] || rw_die 'Repeating installation cannot change the saved statistics API port.'
-        port=$(rw_stats_port)
-    else
-        port=${port:-13100}
-        [[ $port =~ ^[1-9][0-9]{3,4}$ ]] && ((port>=1024 && port<=65535)) || rw_die 'Statistics API port must be from 1024 to 65535 without leading zeroes.'
-        [[ -z $(ss -H -lnt "sport = :$port") ]] || rw_die 'The statistics API port is already in use.'
-    fi
-    [[ $(jq -r --argjson port "$port" '.ports|[.[]]|index($port)' "$RW_CFG") == null ]] || rw_die 'The statistics API port conflicts with an installation port.'
-    if (( RW_DRY_RUN )); then jq -n --argjson port "$port" '{stats_schema:1,loopback_port:$port,read_only_api:true,no_additional_xray_queries:true,backup_required:true,read_only:true}'; return; fi
-    rw_lock
-    local available required=384
-    available=$(awk '/MemAvailable:/ {print int($2/1024)}' /proc/meminfo)
-    if ! rw_stats_enabled; then required=$((required+96)); fi
-    (( available>=required )) || rw_die "Statistics installation and bundle validation require $required MiB of available RAM."
-    namespace=$(jq -r '.api_namespace_owner // .ownership_label' "$RW_OUT/manifest.json")
-    RW_ARCHIVE=${RW_ARCHIVE:-/var/backups/pdm-remnawave/$RW_ENV-pre-stats-$(date -u +%Y%m%dT%H%M%SZ).tgz}
-    rw_stop_writers
-    if ! (rw_backup); then (rw_start_existing) || true; rw_die 'The pre-statistics backup was not created.'; fi
-    rw_backup_open "$RW_ARCHIVE"
-    RW_UPGRADE_SOURCE=$RW_BACKUP/installation; RW_UPGRADE_ARCHIVE=$RW_ARCHIVE; RW_UPGRADE_PENDING=1; RW_MUTATING=1
-    if (rw_stats_activate "$port" "$namespace" > "$RW_TMP/stats-install.log" 2>&1); then
-        RW_UPGRADE_PENDING=0; rw_install_ctl; rw_track_files
-        rw_info 'Statistics addon installed. History before the first confirmed sample remains unknown.'
-    else
-        rw_atomic "$RW_OUT/private/stats-install-error.log" < "$RW_TMP/stats-install.log"
-        rw_upgrade_abort
-        rw_die 'Statistics addon acceptance failed; rollback completed.'
-    fi
-}
-rw_stats_activate() {
-    local port=$1 namespace=$2
-    rw_manifest_set '.stats={enabled:true,schema_version:1,port:$port}' --argjson port "$port"
-    if [[ ! -f $RW_OUT/private/stats.json ]]; then
-        jq -n --arg namespace "$namespace" --arg password "$(openssl rand -hex 32)" --arg token "$(openssl rand -hex 32)" \
-          '{schema_version:1,api_namespace_owner:$namespace,reader_password:$password,api_token:$token}' | rw_atomic "$RW_OUT/private/stats.json"
-    fi
-    rw_stats_assets; rw_stats_patch; rw_render_compose; rw_stats_roles; rw_stats_sql; rw_firewall; rw_track_files
-    rw_start_existing; rw_stats_status
 }
 # shellcheck shell=bash
 rw_ssh_idle() {
@@ -3052,132 +1000,6 @@ rw_ssh_harden() {
     nonce=$(jq -r '.nonce' "$RW_TMP/ssh-status.json")
     ssh "${options[@]}" "$host" "sudo -n bash '$remote/rwctl' ssh commit --nonce '$nonce'"
     ssh "${options[@]}" "$host" "sudo -n bash '$remote/rwctl' ssh confirm --nonce '$nonce'" || rw_die 'Fresh SSH login failed; the timer will restore the previous settings.'
-}
-# shellcheck shell=bash
-rw_tls_cleanup() {
-    local id=${RW_TLS_CONTAINER:-}
-    if [[ -n $id ]] && docker inspect "$id" >/dev/null 2>&1; then
-        [[ $(docker inspect --format '{{index .Config.Labels "io.pdm.remnawave.tls-test"}}' "$id") == "$RW_OWNER" ]] || rw_die 'The TLS test container belongs to another installation.'
-        docker rm -f "$id" >/dev/null
-    fi
-    RW_TLS_CONTAINER=
-}
-rw_tls_restore_proxy() {
-    [[ ${RW_TLS_PROXY_PENDING:-0} == 1 ]] || return 0
-    cat "$RW_OUT/private/tls-caddy.before" > "$RW_OUT/Caddyfile"
-    docker exec "$RW_TLS_MAIN_CADDY" caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null || rw_die 'Cannot restore the HTTP configuration after the TLS test.'
-    RW_TLS_PROXY_PENDING=0
-}
-rw_tls_forward_challenge() {
-    local candidate=$RW_TMP/tls-caddy.proxy domain site
-    cat "$RW_OUT/Caddyfile" | rw_atomic "$RW_OUT/private/tls-caddy.before"
-    cat "$RW_OUT/Caddyfile" > "$candidate"
-    while IFS= read -r domain; do
-        site="http://$domain:$(rw_port http) {"
-        awk -v site="$site" -v port="$RW_TLS_HTTP" '
-          $0==site {active=1}
-          active && $1=="redir" {
-            if(NF!=3) exit 42;
-            print "\t@pdm_tls_redirect not path /.well-known/acme-challenge/*";
-            print "\thandle /.well-known/acme-challenge/* {";
-            print "\t\treverse_proxy 127.0.0.1:" port;
-            print "\t}";
-            print "\tredir @pdm_tls_redirect " $2 " " $3;
-            changed++; next
-          }
-          active && $0=="}" {active=0}
-          {print}
-          END {if(changed!=1) exit 42}' "$candidate" > "$RW_TMP/tls-caddy.site" || rw_die 'Cannot prepare the HTTP challenge route.'
-        cat "$RW_TMP/tls-caddy.site" > "$candidate"
-    done < <(jq -r '.domains|[.[]]|unique[]' "$RW_CFG")
-    RW_TLS_MAIN_CADDY=$(rw_compose --profile public ps -q rw_caddy)
-    docker cp "$candidate" "$RW_TLS_MAIN_CADDY:/tmp/pdm-tls-test.Caddyfile"
-    docker exec "$RW_TLS_MAIN_CADDY" caddy validate --config /tmp/pdm-tls-test.Caddyfile --adapter caddyfile > "$RW_TMP/tls-forward-check.log" 2>&1 || rw_die 'HTTP challenge route validation failed.'
-    RW_TLS_PROXY_PENDING=1
-    cat "$candidate" > "$RW_OUT/Caddyfile"
-    docker exec "$RW_TLS_MAIN_CADDY" caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null || rw_die 'The HTTP challenge route was not applied.'
-}
-rw_tls_get_certificate() {
-    local domain=$1 output=$2 attempt
-    for attempt in {1..90}; do
-        { openssl s_client -connect "127.0.0.1:$RW_TLS_HTTPS" -servername "$domain" </dev/null 2>/dev/null || true; } | openssl x509 -outform PEM > "$output" 2>/dev/null || true
-        if [[ -s $output ]] && openssl x509 -in "$output" -noout -issuer | grep -qi staging; then
-            openssl x509 -in "$output" -noout -checkhost "$domain" >/dev/null || rw_die 'The staging certificate does not match the SNI.'
-            return 0
-        fi
-        sleep 2
-    done
-    docker logs "$RW_TLS_CONTAINER" > "$RW_OUT/private/tls-test-error.log" 2>&1
-    chmod 600 "$RW_OUT/private/tls-test-error.log"
-    rw_die 'Staging certificate acquisition failed; see private/tls-test-error.log.'
-}
-rw_tls_launch() {
-    RW_TLS_CONTAINER=$(docker run -d --rm --network host --memory 96m --memory-swap 96m --cpus 0.5 \
-      --label "io.pdm.remnawave.tls-test=$RW_OWNER" --mount "type=volume,src=${RW_PROJECT}_caddy_data,dst=/data" \
-      --mount "type=bind,src=$RW_TMP/tls-test.Caddyfile,dst=/etc/caddy/Caddyfile,readonly" \
-      --mount "type=bind,src=$RW_TMP/tls-config,dst=/config" --entrypoint caddy "$RW_TLS_IMAGE" run --config /etc/caddy/Caddyfile --adapter caddyfile)
-}
-rw_tls_test() {
-    rw_owned; rw_verify_files
-    RW_TLS_HTTP=${RW_TLS_HTTP:-18082}; RW_TLS_HTTPS=${RW_TLS_HTTPS:-19447}
-    [[ $RW_TLS_HTTP =~ ^[0-9]+$ && $RW_TLS_HTTPS =~ ^[0-9]+$ ]] && (( RW_TLS_HTTP>=1024 && RW_TLS_HTTP<=65535 && RW_TLS_HTTPS>=1024 && RW_TLS_HTTPS<=65535 && RW_TLS_HTTP!=RW_TLS_HTTPS )) || rw_die 'TLS test ports must be distinct integers from 1024 to 65535.'
-    if (( RW_DRY_RUN )); then jq '.domains|[.[]]|unique|{domains:.,staging_only:true,shared_http_challenge_storage:true,read_only:true}' "$RW_CFG"; return; fi
-    rw_root; rw_os; rw_lock; rw_docker_ownership; rw_ssh_idle
-    [[ -n $(rw_compose --profile public ps -q rw_caddy) ]] || rw_die 'A running primary Caddy container is required for the TLS test.'
-    [[ -z $(ss -H -lnt "sport = :$RW_TLS_HTTP") && -z $(ss -H -lnt "sport = :$RW_TLS_HTTPS") ]] || rw_die 'TLS test ports are already in use.'
-    [[ $(docker volume inspect "${RW_PROJECT}_caddy_data" --format '{{index .Labels "io.pdm.remnawave.installation"}}') == "$RW_OWNER" ]] || rw_die 'Caddy storage belongs to another installation.'
-    RW_TLS_IMAGE=$(jq -r '.components.caddy_auth.image' "$RW_OUT/versions.lock.json")
-    mkdir "$RW_TMP/tls-config"
-    {
-        printf '{\n admin off\n http_port %s\n auto_https disable_redirects\n cert_issuer acme {\n  dir https://acme-staging-v02.api.letsencrypt.org/directory\n  disable_tlsalpn_challenge\n }\n}\n' "$RW_TLS_HTTP"
-        while IFS= read -r domain; do printf 'https://%s:%s {\n bind 127.0.0.1\n respond 204\n}\n' "$domain" "$RW_TLS_HTTPS"; done < <(jq -r '.domains|[.[]]|unique[]' "$RW_CFG")
-    } > "$RW_TMP/tls-test.Caddyfile"
-    RW_MUTATING=1
-    rw_tls_forward_challenge
-    rw_tls_launch
-    local domain first second root=/data/caddy/certificates/acme-staging-v02.api.letsencrypt.org-directory
-    : > "$RW_TMP/tls-results.jsonl"
-    while IFS= read -r domain; do
-        rw_tls_get_certificate "$domain" "$RW_TMP/$domain.first.pem"
-        first=$(openssl x509 -in "$RW_TMP/$domain.first.pem" -noout -serial)
-        rw_tls_cleanup
-        # Replace only staging certificates. Production certs, MFA and config are not touched.
-        docker run --rm --network none --cap-drop ALL --entrypoint sh --mount "type=volume,src=${RW_PROJECT}_caddy_data,dst=/data" "$RW_TLS_IMAGE" \
-          -c 'test "$1" = /data/caddy/certificates/acme-staging-v02.api.letsencrypt.org-directory && rm -f -- "$1/$2/$2.crt" "$1/$2/$2.key" "$1/$2/$2.json"' sh "$root" "$domain"
-        rw_tls_launch
-        rw_tls_get_certificate "$domain" "$RW_TMP/$domain.second.pem"
-        second=$(openssl x509 -in "$RW_TMP/$domain.second.pem" -noout -serial)
-        [[ $first != "$second" ]] || rw_die 'The staging certificate was not reissued.'
-        jq -nc --arg domain "$domain" --arg before "$first" --arg after "$second" '{domain:$domain,staging_reissue:true,serial_before:$before,serial_after:$after}' >> "$RW_TMP/tls-results.jsonl"
-    done < <(jq -r '.domains|[.[]]|unique[]' "$RW_CFG")
-    rw_tls_cleanup
-    rw_tls_restore_proxy
-    jq -s '{checked_at_utc:(now|strftime("%Y-%m-%dT%H:%M:%SZ")),staging_only:true,production_storage_kept:true,domains:.}' "$RW_TMP/tls-results.jsonl" | rw_atomic "$RW_OUT/private/tls-test.json"
-    rw_track_files
-    cat "$RW_OUT/private/tls-test.json"
-}
-# shellcheck shell=bash
-rw_mfa_status() {
-    rw_owned
-    [[ $RW_ROLE != node ]] || rw_die 'A standalone node has no administrative MFA portal.'
-    local user
-    user=$(rw_cfg '.admin.username')
-    rw_compose --profile public exec -T rw_caddy cat /data/.local/caddy/users.json > "$RW_TMP/mfa-users.json" || rw_die 'Caddy Auth storage is unavailable.'
-    jq -e --arg user "$user" '[.users[]|select(.username==$user)]|length==1' "$RW_TMP/mfa-users.json" >/dev/null || rw_die 'Exactly one Caddy Auth owner account is required.'
-    rw_mfa_summary "$user" "$RW_TMP/mfa-users.json"
-}
-rw_mfa_summary() {
-    jq --arg user "$1" '.users[]|select(.username==$user)|([.mfa_tokens[]?|select(.type=="totp" and .disabled!=true and .expired!=true)]) as $tokens | {username,authenticator_enrolled:($tokens|length>0),owner_action_required:($tokens|length==0)}' "$2"
-}
-rw_mfa_guide() {
-    rw_owned
-    [[ $RW_ROLE != node ]] || rw_die 'A standalone node has no administrative MFA portal.'
-    printf 'Administrative login: https://%s:%s/r\n' "$(rw_cfg '.domains.panel')" "$(rw_port https)"
-    printf 'Username: %s. Caddy Auth password: auth_password in private/secrets.json.\n' "$(rw_cfg '.admin.username')"
-    printf '%s\n' 'After entering your password, add an MFA application, scan the QR code with your authenticator and confirm the current code.' \
-      'Sign out and test a fresh login in another browser window; both password and code are required.' \
-      'Remnawave credentials are stored separately in private/admin.json. Keep the QR code, secret and backup private.' \
-      'Keep a private backup off the VPS; it contains MFA enrollment. Restore it with rwctl restore while retaining MFA.'
 }
 # shellcheck shell=bash
 rw_interactive() {
@@ -3344,7 +1166,7 @@ rw_main() {
     [[ -z $RW_ROLE_ARG || $RW_ROLE_ARG == "$RW_ROLE" ]] || rw_die 'The role does not match the configuration.'
     case $command in
       plan) rw_plan;;
-      setup|apply) if (( RW_DRY_RUN )); then rw_plan; else rw_deps; rw_apply; rw_track_files; fi;;
+      setup|apply) if (( RW_DRY_RUN )); then rw_plan; else [[ $command == setup ]] || rw_deps; rw_apply; rw_track_files; fi;;
       preflight) rw_preflight;;
       doctor) rw_doctor;;
       info) rw_show_summary;;

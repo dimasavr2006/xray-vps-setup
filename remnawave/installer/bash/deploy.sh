@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 rw_api() {
     local method=$1 path=$2 body=${3:-} target=$4 code
-    local -a args=(--silent --show-error --connect-timeout 5 --max-time 30 --request "$method" --header 'Content-Type: application/json' --header 'X-Forwarded-Proto: https' --header 'X-Forwarded-For: 127.0.0.1')
+    local -a args=(--silent --show-error --connect-timeout 5 --max-time "${RW_API_MAX_TIME:-30}" --request "$method" --header 'Content-Type: application/json' --header 'X-Forwarded-Proto: https' --header 'X-Forwarded-For: 127.0.0.1')
     [[ -z ${RW_AUTH_CONF:-} ]] || args+=(--config "$RW_AUTH_CONF")
     [[ ${RW_AUTH_KIND:-} != admin ]] || args+=(--header 'X-Remnawave-Client-Type: browser')
     [[ -z $body ]] || args+=(--data-binary "@$body")
@@ -19,10 +19,25 @@ rw_auth_header() {
     RW_AUTH_KIND=${2:-api}
 }
 rw_wait_panel() {
-    local attempt
+    local deadline=$((SECONDS+${1:-120})) remaining RW_API_MAX_TIME
     RW_API_ROOT=http://127.0.0.1:$(rw_port panel_api); RW_AUTH_CONF=
-    for ((attempt=0; attempt<60; attempt++)); do rw_api GET /api/auth/status '' "$RW_TMP/status.json" 2>/dev/null && return 0; sleep 2; done
+    while (( SECONDS<deadline )); do
+        remaining=$((deadline-SECONDS)); RW_API_MAX_TIME=$((remaining<3 ? remaining : 3))
+        rw_api GET /api/auth/status '' "$RW_TMP/status.json" 2>/dev/null && return 0
+        (( SECONDS<deadline )) || break
+        sleep 1
+    done
     rw_die 'The panel did not become ready; new containers were retained for diagnostics.'
+}
+rw_wait_node() {
+    local uuid=$1 target=$2 deadline=$((SECONDS+${3:-60})) remaining RW_API_MAX_TIME
+    while (( SECONDS<deadline )); do
+        remaining=$((deadline-SECONDS)); RW_API_MAX_TIME=$((remaining<5 ? remaining : 5))
+        rw_api GET "/api/nodes/$uuid" '' "$target" && jq -e '.response.isConnected==true and .response.isDisabled==false and .response.xrayUptime>0' "$target" >/dev/null && return 0
+        (( SECONDS<deadline )) || break
+        sleep 1
+    done
+    rw_die 'The panel did not confirm a connected node and running Xray.'
 }
 rw_panel_login() {
     RW_API_ROOT=http://127.0.0.1:$(rw_port panel_api); RW_AUTH_CONF=
@@ -256,19 +271,20 @@ rw_apply() {
     else
         [[ ! -d $RW_OUT || -z $(find "$RW_OUT" -mindepth 1 -maxdepth 1 -print -quit) ]] || rw_die 'The directory is not empty and is not owned by the installer.'
     fi
-    rw_resource_checks; rw_dns_checks; rw_docker_install; rw_preflight
+    rw_resource_checks; rw_dns_checks; rw_docker_install; rw_preflight --host-checked
     rw_lock
     RW_MUTATING=1
     if [[ ! -f $RW_OUT/manifest.json ]]; then rw_manifest preparing; fi
-    if [[ $(jq -r '.status' "$RW_OUT/manifest.json") == preparing ]]; then rw_render; rw_manifest_set '.status="prepared"'; fi
-    if [[ $(jq -r '.status' "$RW_OUT/manifest.json") == prepared && -z $(docker ps -q --filter "label=io.pdm.remnawave.installation=$RW_OWNER") ]]; then
+    if [[ $(jq -r '.status' "$RW_OUT/manifest.json") == preparing ]]; then
+        rw_render; rw_manifest_set '.status="prepared"'
+    elif [[ $(jq -r '.status' "$RW_OUT/manifest.json") == prepared && -z $(docker ps -q --filter "label=io.pdm.remnawave.installation=$RW_OWNER") ]]; then
         # A never-started package can receive template fixes without replacing secrets or pinned images.
         rw_render_compose; rw_render_caddy; rw_install_ctl; rw_track_files
     fi
     rw_owned; rw_compose config --quiet
     rw_security_capture
     rw_info 'Pulling pinned Docker images.'
-    rw_compose --profile public --profile node pull
+    rw_pull || rw_die 'Image pull failed or exceeded 15 minutes; retry to resume cached downloads.'
     if ! rw_compose --profile public run --rm --no-deps --entrypoint caddy rw_caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile > "$RW_TMP/caddy-check.log" 2>&1; then
         cat "$RW_TMP/caddy-check.log" | rw_atomic "$RW_OUT/private/caddy-validation.log"
         rw_die 'Caddy configuration validation failed before publication. See private/caddy-validation.log.'
@@ -294,9 +310,10 @@ rw_apply() {
     fi
     rw_existing_caddy_apply
     rw_info 'Starting Caddy/MFA and the public subscription page.'
-    rw_compose --profile public up -d rw_caddy
-    [[ $RW_ROLE == node ]] || rw_compose --profile public up -d rw_subscription
-    if [[ $RW_ROLE != panel ]]; then rw_compose --profile node up -d rw_node; fi
+    local -a services=(rw_caddy)
+    [[ $RW_ROLE == node ]] || services+=(rw_subscription)
+    [[ $RW_ROLE == panel ]] || services+=(rw_node)
+    rw_compose --profile public --profile node up -d "${services[@]}"
     rw_manifest_set '.status="running-awaiting-acceptance"'
     rw_doctor
     rw_security_apply

@@ -98,13 +98,17 @@ rw_upgrade() {
     if [[ $RW_ROLE != node && $(jq -r '.components.panel.image' "$RW_OUT/versions.lock.json") != $(jq -r '.components.panel.image' "$RW_TMP/upgrade-lock.json") ]]; then
         [[ $(rw_compose exec -T rw_db psql -At -U postgres -d remnawave -c "SELECT EXISTS(SELECT FROM information_schema.schemata WHERE schema_name='pdm_stats')") == f ]] || rw_die 'Updating a panel with pdm_stats requires a verified statistics migration.'
     fi
-    docker compose --project-directory "$RW_OUT" --project-name "$RW_PROJECT" -f "$RW_TMP/upgrade-compose.json" --profile public --profile node pull || rw_die 'Upgrade images could not be pulled; current services were not stopped.'
+    local -a pull_services=()
+    case ${RW_COMPONENT:-all} in all) :;; caddy) pull_services=(rw_caddy);; *) pull_services=("rw_$RW_COMPONENT");; esac
+    timeout --foreground 900 docker compose --project-directory "$RW_OUT" --project-name "$RW_PROJECT" -f "$RW_TMP/upgrade-compose.json" --profile public --profile node pull --policy missing "${pull_services[@]}" || rw_die 'Upgrade image pull failed or exceeded 15 minutes; current services were not stopped.'
     # Validate against isolated Caddy stores; a candidate cannot migrate live MFA state before backup.
-    local validation
-    validation=$(mktemp -d "$RW_TMP/validation.XXXXXX")
-    mkdir "$validation/data" "$validation/config" || rw_die 'Cannot create isolated validation storage.'
-    jq --arg data "$validation/data" --arg config "$validation/config" '.services.rw_caddy.network_mode="none" | .services.rw_caddy.volumes|=map(if startswith("caddy_data:") then $data+":/data" elif startswith("caddy_config:") then $config+":/config" else . end)' "$RW_TMP/upgrade-compose.json" > "$RW_TMP/validate-compose.json"
-    docker compose --project-directory "$RW_OUT" --project-name "$RW_PROJECT" -f "$RW_TMP/validate-compose.json" --profile public run --rm --no-deps --entrypoint caddy rw_caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile > "$RW_TMP/candidate-validation.log" 2>&1 || rw_die 'Candidate Caddy validation failed; the current stack was not stopped.'
+    if [[ ${RW_COMPONENT:-all} != node && ${RW_COMPONENT:-all} != subscription ]]; then
+        local validation
+        validation=$(mktemp -d "$RW_TMP/validation.XXXXXX")
+        mkdir "$validation/data" "$validation/config" || rw_die 'Cannot create isolated validation storage.'
+        jq --arg data "$validation/data" --arg config "$validation/config" '.services.rw_caddy.network_mode="none" | .services.rw_caddy.volumes|=map(if startswith("caddy_data:") then $data+":/data" elif startswith("caddy_config:") then $config+":/config" else . end)' "$RW_TMP/upgrade-compose.json" > "$RW_TMP/validate-compose.json"
+        docker compose --project-directory "$RW_OUT" --project-name "$RW_PROJECT" -f "$RW_TMP/validate-compose.json" --profile public run --rm --no-deps --entrypoint caddy rw_caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile > "$RW_TMP/candidate-validation.log" 2>&1 || rw_die 'Candidate Caddy validation failed; the current stack was not stopped.'
+    fi
     RW_MUTATING=1
     # Freeze writers for a rollback point that does not discard concurrent user edits.
     if [[ ${RW_COMPONENT:-all} != node && ${RW_COMPONENT:-all} != subscription ]]; then rw_stop_writers; fi

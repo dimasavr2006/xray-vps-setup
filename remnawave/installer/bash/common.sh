@@ -9,7 +9,7 @@ rw_safe_parents() {
     parent=$(dirname -- "$1")
     while [[ $parent != / && $parent != . ]]; do
         [[ ! -L $parent ]] || rw_die 'A parent directory is a symbolic link.'
-        parent=$(dirname -- "$parent")
+        if [[ $parent == */* ]]; then parent=${parent%/*}; [[ -n $parent ]] || parent=/; else parent=.; fi
     done
 }
 rw_atomic() {
@@ -65,7 +65,6 @@ rw_resume_writes() {
     rm -f -- "$RW_OUT/.rw-write.json"
 }
 rw_managed_remove() { rw_write_begin "$RW_OUT/$1"; rw_resume_writes; }
-rw_jwrite() { local target=$1; shift; jq "$@" | rw_atomic "$target"; }
 rw_lock() {
     [[ ${RW_LOCK_DIR:-} != "$RW_OUT" ]] || return 0
     rw_safe_parents "$RW_OUT/private/.lock-check"
@@ -101,10 +100,15 @@ rw_deps() {
     for cmd in curl jq openssl dig ss nft flock ssh-keygen; do command -v "$cmd" >/dev/null 2>&1 || missing=1; done
     if (( missing )); then
         rw_root
-        rw_info 'Installing dependencies: curl jq openssl dnsutils iproute2 nftables util-linux ca-certificates.'
-        apt-get update -q
+        rw_info 'Installing dependencies: curl jq openssl dnsutils iproute2 nftables util-linux ca-certificates openssh-client.'
+        rw_apt_update
         DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends curl jq openssl dnsutils iproute2 nftables util-linux ca-certificates openssh-client
     fi
+}
+rw_apt_update() {
+    [[ ${RW_APT_UPDATED:-0} != 1 ]] || return 0
+    apt-get update -q || rw_die 'Cannot refresh APT package indexes.'
+    RW_APT_UPDATED=1
 }
 rw_os() {
     # shellcheck disable=SC1091
@@ -112,14 +116,17 @@ rw_os() {
     [[ $ID == debian && $VERSION_ID == 13 && $(uname -m) == x86_64 ]] || rw_die 'Supported server: Debian 13 amd64.'
 }
 rw_docker_install() {
+    RW_DOCKER_INSTALLED=0
     if ! command -v docker >/dev/null 2>&1; then
+        RW_DOCKER_INSTALLED=1
         rw_info 'Installing Docker Engine and Compose from the official Docker APT repository.'
         apt-get install -y --no-install-recommends ca-certificates curl
         install -m 0755 -d /etc/apt/keyrings
         curl -fsS --proto '=https' --tlsv1.2 https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc
         chmod a+r /etc/apt/keyrings/docker.asc
         printf '%s\n' 'Types: deb' 'URIs: https://download.docker.com/linux/debian' 'Suites: trixie' 'Components: stable' 'Architectures: amd64' 'Signed-By: /etc/apt/keyrings/docker.asc' > /etc/apt/sources.list.d/docker.sources
-        apt-get update -q
+        # Adding a repository invalidates the package index from rw_deps.
+        RW_APT_UPDATED=0; rw_apt_update
         DEBIAN_FRONTEND=noninteractive apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
         systemctl enable --now docker.service
     fi
@@ -138,7 +145,7 @@ rw_config_load() {
     [[ $RW_OUT =~ ^/[A-Za-z0-9_./-]+$ ]] || rw_die 'Installation directory must be an absolute path without spaces or control characters.'
     [[ $RW_OUT != / && $RW_OUT != /opt && $RW_OUT != /etc && $RW_OUT != /tmp && $RW_OUT != /root && $RW_OUT != /home ]] || rw_die 'Specify a dedicated installation directory.'
     local parent=$RW_OUT
-    while [[ $parent != / ]]; do [[ ! -L $parent ]] || rw_die 'The installation directory contains a symbolic link.'; parent=$(dirname -- "$parent"); done
+    while [[ $parent != / ]]; do [[ ! -L $parent ]] || rw_die 'The installation directory contains a symbolic link.'; parent=${parent%/*}; [[ -n $parent ]] || parent=/; done
     RW_PROJECT=pdm-rw-$RW_ENV
     RW_OWNER=$(printf '%s' "$RW_ENV:$RW_OUT" | sha256sum | cut -d' ' -f1)
     RW_SUBNET=$(jq -r '.docker_subnet' "$RW_CFG"); RW_NET_PREFIX=${RW_SUBNET%.0/24}; RW_PANEL_ADDRESS=$RW_NET_PREFIX.1
@@ -156,6 +163,7 @@ rw_memory_limits() {
         else {rw_db:512,rw_valkey:128,rw_panel:768,rw_subscription:128,rw_caddy:128,rw_node:256} end' "$RW_CFG"
 }
 rw_compose() { docker compose --project-name "$RW_PROJECT" -f "$RW_OUT/compose.json" "$@"; }
+rw_pull() { timeout --foreground 900 docker compose --project-name "$RW_PROJECT" -f "$RW_OUT/compose.json" --profile public --profile node pull --policy missing "$@"; }
 rw_manifest_set() { local filter=$1; shift; jq "$@" "$filter" "$RW_OUT/manifest.json" | rw_atomic "$RW_OUT/manifest.json"; }
 rw_manifest() {
     local status=$1

@@ -4,6 +4,88 @@ set +x
 set -euo pipefail
 export LC_ALL=C
 umask 077
+rw_config_filter() {
+cat <<'RW_CONFIG_JQ'
+def ip4:
+  type == "string" and test("^(0|[1-9][0-9]{0,2})(\\.(0|[1-9][0-9]{0,2})){3}$") and
+  (split(".") | all(tonumber <= 255));
+def ip6:
+  type == "string" and test("^[a-fA-F0-9:]+$") and
+  (split("::") as $halves | ($halves|length) <= 2 and
+   ([split(":")[] | select(length > 0)] as $parts |
+    ($parts | all(length <= 4)) and
+    (if ($halves|length) == 2 then ($parts|length) < 8
+     else ($parts|length) == 8 end))) and
+  ((startswith(":")|not) or startswith("::")) and
+  ((endswith(":")|not) or endswith("::"));
+def ip: ip4 or ip6;
+def ipnorm:
+  if contains(":") then
+    ascii_downcase | split("::") as $halves |
+    ($halves[0] | split(":") | map(select(length > 0))) as $left |
+    (($halves[1] // "") | split(":") | map(select(length > 0))) as $right |
+    (if ($halves|length) == 2 then $left + [range(8-($left|length)-($right|length))|"0"] + $right
+     else $left end) | map(("0000"+.)|.[-4:]) | join(":")
+  else . end;
+def domain:
+  type == "string" and length <= 253 and contains(".") and
+  test("^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$") and (ip|not);
+def port: type == "number" and . == floor and . >= 1 and . <= 65535;
+def require($ok; $message): if $ok then . else error($message) end;
+.
+| require(type == "object"; "config must be a JSON object")
+| require((keys - ["schema_version","environment_id","role","network_mode","domains","public_addresses","panel_addresses","management_address","ports","admin","resources","docker_subnet","acme","node_country","existing_caddy","security"]) == []; "unknown config field")
+| require(.security==null or (.security|type=="object" and (keys-["enabled","root_public_key"]==[])); "unknown security field")
+| require(.security.enabled==null or (.security.enabled|type=="boolean"); "security.enabled must be boolean")
+| require(.security.root_public_key==null or (.security.root_public_key|type=="string" and length<=8192 and test("^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp256) [A-Za-z0-9+/=]+( [^\\r\\n]*)?$")); "root_public_key must be a public SSH key line")
+| require(.schema_version == 1; "expected config schema_version 1")
+| require(.environment_id | type == "string" and test("^[a-z][a-z0-9-]{2,19}$"); "environment_id: 3..20 letters/digits/hyphens")
+| require(.role == "panel" or .role == "node" or .role == "panel-node"; "invalid role")
+| .network_mode //= "clean"
+| require(.network_mode == "clean" or .network_mode == "fi-parallel"; "invalid network_mode")
+| require(.network_mode != "fi-parallel" or .role == "panel-node"; "FI parallel requires panel-node")
+| .role as $role
+| (if $role == "panel" then ["panel","subscription"] elif $role == "node" then ["node"] else ["node","panel","subscription"] end) as $names
+| require((.domains|type) == "object" and (.domains|keys) == $names; "wrong domains for role")
+| require(.domains | all(.[]; domain); "domains must be lower-case DNS names without URL/path/port")
+| require(.public_addresses | type == "array" and length > 0 and all(ip); "public_addresses must contain literal A/AAAA IPs")
+| .public_addresses |= (map(ipnorm)|unique)
+| .panel_addresses //= []
+| require(.panel_addresses | type == "array" and all(ip); "invalid panel_addresses")
+| .panel_addresses |= (map(ipnorm)|unique)
+| require(($role != "node" and (.panel_addresses|length) == 0) or ($role == "node" and (.panel_addresses|length) > 0); "standalone node requires panel source IPs")
+| if $role=="node" then .management_address //= .domains.node | require(.management_address|ip or domain; "invalid node management_address")
+  else require(.management_address==null; "management_address belongs to a standalone node") end
+| .ports //= {}
+| (if $role == "panel" then {http:80,https:443,panel_api:13000,metrics:13001,subscription_api:13010,caddy_admin:12019}
+   elif $role == "node" then {http:80,reality:443,xhttp:8443,node_api:2222,reality_target:14123,caddy_admin:12019}
+   elif .network_mode == "fi-parallel" then {http:18080,https:9443,panel_api:13000,metrics:13001,subscription_api:13010,reality:24443,xhttp:28443,node_api:2222,reality_target:14123,caddy_admin:12019}
+   else {http:80,https:9443,panel_api:13000,metrics:13001,subscription_api:13010,reality:443,xhttp:8443,node_api:2222,reality_target:14123,caddy_admin:12019} end) as $defaults
+| (if $role != "node" and .domains.panel == .domains.subscription then $defaults + {subscription_https:9444} else $defaults end) as $defaults
+| require((.ports|type) == "object" and ((.ports|keys)-($defaults|keys)) == []; "unknown port for role")
+| .ports = ($defaults + .ports)
+| require(.ports | all(.[]; port); "ports must be integers 1..65535")
+| require((.ports|[.[]]|unique|length) == (.ports|length); "duplicate ports")
+| require(.network_mode != "fi-parallel" or ((.ports|[.[]]) - [80,443,8443,37241,4123,53042] | length) == (.ports|length); "FI port reserved by current system")
+| .admin //= {}
+| require($role == "node" or (.admin.username|type == "string" and test("^[a-z][a-z0-9_-]{2,31}$")); "invalid admin username")
+| require($role == "node" or (.admin.email|type == "string" and test("^[A-Za-z0-9._+-]+@[a-z0-9.-]+\\.[a-z]{2,}$")); "invalid admin email")
+| require((.admin|keys)-["username","email"] == []; "unknown admin field; no plaintext secrets in config")
+| .resources //= {}
+| .resources = ({purpose:"test",profile:"standard",image_gib:3,data_gib:1,restore_gib:2,reserve_gib:1} + .resources)
+| require(.resources.purpose == "test" or .resources.purpose == "production"; "invalid purpose")
+| require(.network_mode != "fi-parallel" or .resources.purpose == "test"; "FI parallel is only a test")
+| require(.resources.profile == "standard" or (.resources.profile == "compact-test" and .resources.purpose == "test"); "compact-test profile is only for tests")
+| require([.resources.image_gib,.resources.data_gib,.resources.restore_gib,.resources.reserve_gib] | all(type == "number" and . > 0 and . <= 10000); "positive disk budgets required")
+| require((.resources|keys)-["purpose","profile","image_gib","data_gib","restore_gib","reserve_gib"] == []; "unknown resources field")
+| .docker_subnet //= "172.29.240.0/24"
+| require(.docker_subnet | type == "string" and test("^(10\\.[0-9]{1,3}\\.[0-9]{1,3}|172\\.(1[6-9]|2[0-9]|3[01])\\.[0-9]{1,3}|192\\.168\\.[0-9]{1,3})\\.0/24$") and (split("/")[0]|ip4); "docker_subnet must be a private IPv4 /24")
+| .acme //= "production"
+| require(.acme == "production" or .acme == "staging"; "acme must be production or staging")
+| .node_country //= "XX"
+| require(.node_country | type == "string" and test("^[A-Z]{2}$"); "invalid country code")
+RW_CONFIG_JQ
+}
 rw_versions() {
 cat <<'RW_VERSIONS'
 {
@@ -183,88 +265,6 @@ cat <<'RW_AUTH_GLOBAL'
 		}
 	}
 RW_AUTH_GLOBAL
-}
-rw_config_filter() {
-cat <<'RW_CONFIG_JQ'
-def ip4:
-  type == "string" and test("^(0|[1-9][0-9]{0,2})(\\.(0|[1-9][0-9]{0,2})){3}$") and
-  (split(".") | all(tonumber <= 255));
-def ip6:
-  type == "string" and test("^[a-fA-F0-9:]+$") and
-  (split("::") as $halves | ($halves|length) <= 2 and
-   ([split(":")[] | select(length > 0)] as $parts |
-    ($parts | all(length <= 4)) and
-    (if ($halves|length) == 2 then ($parts|length) < 8
-     else ($parts|length) == 8 end))) and
-  ((startswith(":")|not) or startswith("::")) and
-  ((endswith(":")|not) or endswith("::"));
-def ip: ip4 or ip6;
-def ipnorm:
-  if contains(":") then
-    ascii_downcase | split("::") as $halves |
-    ($halves[0] | split(":") | map(select(length > 0))) as $left |
-    (($halves[1] // "") | split(":") | map(select(length > 0))) as $right |
-    (if ($halves|length) == 2 then $left + [range(8-($left|length)-($right|length))|"0"] + $right
-     else $left end) | map(("0000"+.)|.[-4:]) | join(":")
-  else . end;
-def domain:
-  type == "string" and length <= 253 and contains(".") and
-  test("^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$") and (ip|not);
-def port: type == "number" and . == floor and . >= 1 and . <= 65535;
-def require($ok; $message): if $ok then . else error($message) end;
-.
-| require(type == "object"; "config must be a JSON object")
-| require((keys - ["schema_version","environment_id","role","network_mode","domains","public_addresses","panel_addresses","management_address","ports","admin","resources","docker_subnet","acme","node_country","existing_caddy","security"]) == []; "unknown config field")
-| require(.security==null or (.security|type=="object" and (keys-["enabled","root_public_key"]==[])); "unknown security field")
-| require(.security.enabled==null or (.security.enabled|type=="boolean"); "security.enabled must be boolean")
-| require(.security.root_public_key==null or (.security.root_public_key|type=="string" and length<=8192 and test("^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp256) [A-Za-z0-9+/=]+( [^\\r\\n]*)?$")); "root_public_key must be a public SSH key line")
-| require(.schema_version == 1; "expected config schema_version 1")
-| require(.environment_id | type == "string" and test("^[a-z][a-z0-9-]{2,19}$"); "environment_id: 3..20 letters/digits/hyphens")
-| require(.role == "panel" or .role == "node" or .role == "panel-node"; "invalid role")
-| .network_mode //= "clean"
-| require(.network_mode == "clean" or .network_mode == "fi-parallel"; "invalid network_mode")
-| require(.network_mode != "fi-parallel" or .role == "panel-node"; "FI parallel requires panel-node")
-| .role as $role
-| (if $role == "panel" then ["panel","subscription"] elif $role == "node" then ["node"] else ["node","panel","subscription"] end) as $names
-| require((.domains|type) == "object" and (.domains|keys) == $names; "wrong domains for role")
-| require(.domains | all(.[]; domain); "domains must be lower-case DNS names without URL/path/port")
-| require(.public_addresses | type == "array" and length > 0 and all(ip); "public_addresses must contain literal A/AAAA IPs")
-| .public_addresses |= (map(ipnorm)|unique)
-| .panel_addresses //= []
-| require(.panel_addresses | type == "array" and all(ip); "invalid panel_addresses")
-| .panel_addresses |= (map(ipnorm)|unique)
-| require(($role != "node" and (.panel_addresses|length) == 0) or ($role == "node" and (.panel_addresses|length) > 0); "standalone node requires panel source IPs")
-| if $role=="node" then .management_address //= .domains.node | require(.management_address|ip or domain; "invalid node management_address")
-  else require(.management_address==null; "management_address belongs to a standalone node") end
-| .ports //= {}
-| (if $role == "panel" then {http:80,https:443,panel_api:13000,metrics:13001,subscription_api:13010,caddy_admin:12019}
-   elif $role == "node" then {http:80,reality:443,xhttp:8443,node_api:2222,reality_target:14123,caddy_admin:12019}
-   elif .network_mode == "fi-parallel" then {http:18080,https:9443,panel_api:13000,metrics:13001,subscription_api:13010,reality:24443,xhttp:28443,node_api:2222,reality_target:14123,caddy_admin:12019}
-   else {http:80,https:9443,panel_api:13000,metrics:13001,subscription_api:13010,reality:443,xhttp:8443,node_api:2222,reality_target:14123,caddy_admin:12019} end) as $defaults
-| (if $role != "node" and .domains.panel == .domains.subscription then $defaults + {subscription_https:9444} else $defaults end) as $defaults
-| require((.ports|type) == "object" and ((.ports|keys)-($defaults|keys)) == []; "unknown port for role")
-| .ports = ($defaults + .ports)
-| require(.ports | all(.[]; port); "ports must be integers 1..65535")
-| require((.ports|[.[]]|unique|length) == (.ports|length); "duplicate ports")
-| require(.network_mode != "fi-parallel" or ((.ports|[.[]]) - [80,443,8443,37241,4123,53042] | length) == (.ports|length); "FI port reserved by current system")
-| .admin //= {}
-| require($role == "node" or (.admin.username|type == "string" and test("^[a-z][a-z0-9_-]{2,31}$")); "invalid admin username")
-| require($role == "node" or (.admin.email|type == "string" and test("^[A-Za-z0-9._+-]+@[a-z0-9.-]+\\.[a-z]{2,}$")); "invalid admin email")
-| require((.admin|keys)-["username","email"] == []; "unknown admin field; no plaintext secrets in config")
-| .resources //= {}
-| .resources = ({purpose:"test",profile:"standard",image_gib:3,data_gib:1,restore_gib:2,reserve_gib:1} + .resources)
-| require(.resources.purpose == "test" or .resources.purpose == "production"; "invalid purpose")
-| require(.network_mode != "fi-parallel" or .resources.purpose == "test"; "FI parallel is only a test")
-| require(.resources.profile == "standard" or (.resources.profile == "compact-test" and .resources.purpose == "test"); "compact-test profile is only for tests")
-| require([.resources.image_gib,.resources.data_gib,.resources.restore_gib,.resources.reserve_gib] | all(type == "number" and . > 0 and . <= 10000); "positive disk budgets required")
-| require((.resources|keys)-["purpose","profile","image_gib","data_gib","restore_gib","reserve_gib"] == []; "unknown resources field")
-| .docker_subnet //= "172.29.240.0/24"
-| require(.docker_subnet | type == "string" and test("^(10\\.[0-9]{1,3}\\.[0-9]{1,3}|172\\.(1[6-9]|2[0-9]|3[01])\\.[0-9]{1,3}|192\\.168\\.[0-9]{1,3})\\.0/24$") and (split("/")[0]|ip4); "docker_subnet must be a private IPv4 /24")
-| .acme //= "production"
-| require(.acme == "production" or .acme == "staging"; "acme must be production or staging")
-| .node_country //= "XX"
-| require(.node_country | type == "string" and test("^[A-Z]{2}$"); "invalid country code")
-RW_CONFIG_JQ
 }
 rw_stats_schema() {
 cat <<'RW_STATS_PAYLOAD'
@@ -987,7 +987,7 @@ rw_safe_parents() {
     parent=$(dirname -- "$1")
     while [[ $parent != / && $parent != . ]]; do
         [[ ! -L $parent ]] || rw_die 'A parent directory is a symbolic link.'
-        parent=$(dirname -- "$parent")
+        if [[ $parent == */* ]]; then parent=${parent%/*}; [[ -n $parent ]] || parent=/; else parent=.; fi
     done
 }
 rw_atomic() {
@@ -1043,7 +1043,6 @@ rw_resume_writes() {
     rm -f -- "$RW_OUT/.rw-write.json"
 }
 rw_managed_remove() { rw_write_begin "$RW_OUT/$1"; rw_resume_writes; }
-rw_jwrite() { local target=$1; shift; jq "$@" | rw_atomic "$target"; }
 rw_lock() {
     [[ ${RW_LOCK_DIR:-} != "$RW_OUT" ]] || return 0
     rw_safe_parents "$RW_OUT/private/.lock-check"
@@ -1079,10 +1078,15 @@ rw_deps() {
     for cmd in curl jq openssl dig ss nft flock ssh-keygen; do command -v "$cmd" >/dev/null 2>&1 || missing=1; done
     if (( missing )); then
         rw_root
-        rw_info 'Installing dependencies: curl jq openssl dnsutils iproute2 nftables util-linux ca-certificates.'
-        apt-get update -q
+        rw_info 'Installing dependencies: curl jq openssl dnsutils iproute2 nftables util-linux ca-certificates openssh-client.'
+        rw_apt_update
         DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends curl jq openssl dnsutils iproute2 nftables util-linux ca-certificates openssh-client
     fi
+}
+rw_apt_update() {
+    [[ ${RW_APT_UPDATED:-0} != 1 ]] || return 0
+    apt-get update -q || rw_die 'Cannot refresh APT package indexes.'
+    RW_APT_UPDATED=1
 }
 rw_os() {
     # shellcheck disable=SC1091
@@ -1090,14 +1094,17 @@ rw_os() {
     [[ $ID == debian && $VERSION_ID == 13 && $(uname -m) == x86_64 ]] || rw_die 'Supported server: Debian 13 amd64.'
 }
 rw_docker_install() {
+    RW_DOCKER_INSTALLED=0
     if ! command -v docker >/dev/null 2>&1; then
+        RW_DOCKER_INSTALLED=1
         rw_info 'Installing Docker Engine and Compose from the official Docker APT repository.'
         apt-get install -y --no-install-recommends ca-certificates curl
         install -m 0755 -d /etc/apt/keyrings
         curl -fsS --proto '=https' --tlsv1.2 https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc
         chmod a+r /etc/apt/keyrings/docker.asc
         printf '%s\n' 'Types: deb' 'URIs: https://download.docker.com/linux/debian' 'Suites: trixie' 'Components: stable' 'Architectures: amd64' 'Signed-By: /etc/apt/keyrings/docker.asc' > /etc/apt/sources.list.d/docker.sources
-        apt-get update -q
+        # Adding a repository invalidates the package index from rw_deps.
+        RW_APT_UPDATED=0; rw_apt_update
         DEBIAN_FRONTEND=noninteractive apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
         systemctl enable --now docker.service
     fi
@@ -1116,7 +1123,7 @@ rw_config_load() {
     [[ $RW_OUT =~ ^/[A-Za-z0-9_./-]+$ ]] || rw_die 'Installation directory must be an absolute path without spaces or control characters.'
     [[ $RW_OUT != / && $RW_OUT != /opt && $RW_OUT != /etc && $RW_OUT != /tmp && $RW_OUT != /root && $RW_OUT != /home ]] || rw_die 'Specify a dedicated installation directory.'
     local parent=$RW_OUT
-    while [[ $parent != / ]]; do [[ ! -L $parent ]] || rw_die 'The installation directory contains a symbolic link.'; parent=$(dirname -- "$parent"); done
+    while [[ $parent != / ]]; do [[ ! -L $parent ]] || rw_die 'The installation directory contains a symbolic link.'; parent=${parent%/*}; [[ -n $parent ]] || parent=/; done
     RW_PROJECT=pdm-rw-$RW_ENV
     RW_OWNER=$(printf '%s' "$RW_ENV:$RW_OUT" | sha256sum | cut -d' ' -f1)
     RW_SUBNET=$(jq -r '.docker_subnet' "$RW_CFG"); RW_NET_PREFIX=${RW_SUBNET%.0/24}; RW_PANEL_ADDRESS=$RW_NET_PREFIX.1
@@ -1134,6 +1141,7 @@ rw_memory_limits() {
         else {rw_db:512,rw_valkey:128,rw_panel:768,rw_subscription:128,rw_caddy:128,rw_node:256} end' "$RW_CFG"
 }
 rw_compose() { docker compose --project-name "$RW_PROJECT" -f "$RW_OUT/compose.json" "$@"; }
+rw_pull() { timeout --foreground 900 docker compose --project-name "$RW_PROJECT" -f "$RW_OUT/compose.json" --profile public --profile node pull --policy missing "$@"; }
 rw_manifest_set() { local filter=$1; shift; jq "$@" "$filter" "$RW_OUT/manifest.json" | rw_atomic "$RW_OUT/manifest.json"; }
 rw_manifest() {
     local status=$1
@@ -1177,16 +1185,19 @@ rw_dns_addresses() {
     jq -Rn -f "$RW_TMP/address-dns.jq" < "$RW_TMP/address-dns.txt"
 }
 rw_detect_addresses() {
-    local family address url
+    local family url pid
+    local -a pids=()
     : > "$RW_TMP/detected-addresses.txt"
     ip -j address show scope global > "$RW_TMP/interfaces.json" 2>/dev/null || printf '[]\n' > "$RW_TMP/interfaces.json"
     jq -r '.[]|select(.ifname|test("^(lo|docker|br-|veth|virbr|pdm-)" )|not)|.addr_info[]?|select(.scope=="global" and .preferred_life_time!=0)|.local' "$RW_TMP/interfaces.json" >> "$RW_TMP/detected-addresses.txt"
     for family in 4 6; do
         if [[ $family == 4 ]]; then url=https://api.ipify.org; else url=https://api6.ipify.org; fi
-        if address=$(curl -"$family" -fsS --proto '=https' --connect-timeout 2 --max-time 4 --max-filesize 128 "$url" 2>/dev/null); then
-            printf '%s\n' "$address" >> "$RW_TMP/detected-addresses.txt"
-        fi
+        # Independent family probes share a four-second deadline, not two serial waits.
+        (curl -"$family" -fsS --proto '=https' --connect-timeout 2 --max-time 4 --max-filesize 128 "$url" > "$RW_TMP/echo-ip$family" 2>/dev/null || : > "$RW_TMP/echo-ip$family") &
+        pids+=("$!")
     done
+    for pid in "${pids[@]}"; do wait "$pid"; done
+    for family in 4 6; do cat "$RW_TMP/echo-ip$family" >> "$RW_TMP/detected-addresses.txt"; printf '\n' >> "$RW_TMP/detected-addresses.txt"; done
     { rw_address_jq; cat <<'RW_PUBLIC_JQ'
 [inputs|select(ip)|ipnorm|select(
  if contains(":") then test("^[23]")
@@ -1475,7 +1486,7 @@ rw_security_apply() {
         rw_die 'A host firewall change is already awaiting a fresh SSH connection.'
     fi
     if ! command -v ufw >/dev/null 2>&1; then
-        apt-get update -q
+        rw_apt_update
         DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ufw
     fi
     [[ -f $RW_OUT/private/security-preserved-ports.json ]] || rw_security_capture
@@ -1588,6 +1599,31 @@ rw_security_status() {
     rw_owned
     jq '{root_key:.security.root_key,ufw:.security.ufw}' "$RW_OUT/manifest.json"
     if command -v ufw >/dev/null 2>&1; then ufw status verbose; fi
+}
+rw_security_remove_rules() {
+    # show added includes stored rules even when UFW is inactive after rollback.
+    # Parse only the two rule shapes this installer creates; never evaluate text.
+    local line body source port
+    local -a rule=()
+    ufw show added > "$RW_TMP/ufw-added" || rw_die 'Cannot read stored UFW rules.'
+    : > "$RW_TMP/ufw-remove"
+    while IFS= read -r line; do
+        [[ $line == *" comment '$RW_PROJECT'" ]] || continue
+        body=${line%" comment '$RW_PROJECT'"}; body=${body#ufw }
+        read -r -a rule <<< "$body"
+        if [[ ${#rule[@]} == 2 && ${rule[0]} == allow && ${rule[1]} =~ ^[0-9]{1,5}/(tcp|udp)$ ]]; then
+            port=${rule[1]%/*}
+        elif [[ ${#rule[@]} == 9 && ${rule[0]} == allow && ${rule[1]} == from && ${rule[3]} == to && ${rule[4]} == any && ${rule[5]} == port && ${rule[7]} == proto && ${rule[8]} == tcp ]]; then
+            source=${rule[2]}; port=${rule[6]}
+            [[ $source =~ ^[0-9a-fA-F:.]+$ ]] || rw_die 'Unexpected source in an owned UFW rule.'
+        else rw_die 'An owned UFW rule changed shape; review it before removal.'; fi
+        [[ $port =~ ^[1-9][0-9]{0,4}$ ]] && (( port<=65535 )) || rw_die 'Invalid port in an owned UFW rule.'
+        printf '%s\n' "$body" >> "$RW_TMP/ufw-remove"
+    done < "$RW_TMP/ufw-added"
+    while IFS= read -r body; do
+        read -r -a rule <<< "$body"
+        ufw --force delete "${rule[@]}" >/dev/null || rw_die 'Cannot remove an owned UFW rule.'
+    done < "$RW_TMP/ufw-remove"
 }
 # shellcheck shell=bash
 rw_secrets() {
@@ -1758,6 +1794,7 @@ rw_resource_checks() {
 }
 rw_dns_checks() {
     local domain family
+    { rw_config_filter | sed '/^\.$/,$d'; printf '\n[inputs|select(ip)|ipnorm]|unique\n'; } > "$RW_TMP/dns.jq"
     while IFS= read -r domain; do
         : > "$RW_TMP/dns.txt"
         for family in A AAAA; do
@@ -1766,26 +1803,25 @@ rw_dns_checks() {
             awk '$4=="A" || $4=="AAAA" {print $5}' "$RW_TMP/dig-answer.txt" >> "$RW_TMP/dns.txt"
         done
         # CNAMEs are excluded, but every A/AAAA address must match the declared set.
-        { rw_config_filter | sed '/^\.$/,$d'; printf '\n[inputs|select(ip)|ipnorm]|unique\n'; } > "$RW_TMP/dns.jq"
         jq -Rn -f "$RW_TMP/dns.jq" < "$RW_TMP/dns.txt" > "$RW_TMP/dns.json"
         jq -e --slurpfile actual "$RW_TMP/dns.json" '.public_addresses == $actual[0]' "$RW_CFG" >/dev/null || rw_die "A/AAAA records for $domain do not match public_addresses."
-    done < <(jq -r '.domains[]' "$RW_CFG")
+    done < <(jq -r '.domains|[.[]]|unique[]' "$RW_CFG")
 }
 rw_docker_ownership() {
-    local id owner project configs
-    while IFS= read -r id; do
-        [[ -n $id ]] || continue
-        owner=$(docker inspect --format '{{index .Config.Labels "io.pdm.remnawave.installation"}}' "$id")
-        project=$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project"}}' "$id")
-        configs=$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project.config_files"}}' "$id")
-        [[ $owner == "$RW_OWNER" && $project == "$RW_PROJECT" && $configs == "$RW_OUT/compose.json" ]] || rw_die 'A Compose project with this name belongs to another installation.'
-    done < <(docker ps -aq --filter "label=com.docker.compose.project=$RW_PROJECT")
+    local -a ids=()
+    docker ps -aq --filter "label=com.docker.compose.project=$RW_PROJECT" > "$RW_TMP/ownership-ids" || rw_die 'Cannot list installation containers.'
+    mapfile -t ids < "$RW_TMP/ownership-ids"
+    (( ${#ids[@]} )) || return 0
+    docker inspect --format '{{json .Config.Labels}}' "${ids[@]}" > "$RW_TMP/ownership-labels.jsonl" || rw_die 'Cannot inspect installation containers.'
+    jq -se --arg owner "$RW_OWNER" --arg project "$RW_PROJECT" --arg configs "$RW_OUT/compose.json" --argjson count "${#ids[@]}" '
+      length==$count and all(.[]; .["io.pdm.remnawave.installation"]==$owner and .["com.docker.compose.project"]==$project and .["com.docker.compose.project.config_files"]==$configs)' "$RW_TMP/ownership-labels.jsonl" >/dev/null || rw_die 'A Compose project with this name belongs to another installation.'
 }
 rw_port_checks() {
     local name port id pids row socket_pids owned_ids publication
     owned_ids=$(docker ps -q --filter "label=io.pdm.remnawave.installation=$RW_OWNER")
     : > "$RW_TMP/owned-pids"
     for id in $owned_ids; do docker top "$id" -eo pid | awk 'NR>1 && $1~/^[0-9]+$/ {print $1}' >> "$RW_TMP/owned-pids"; done
+    ss -H -lntp > "$RW_TMP/tcp-listeners" || rw_die 'Cannot read TCP listeners.'
     while IFS=$'\t' read -r name port; do
         while IFS= read -r row; do
             [[ -n $row ]] || continue
@@ -1802,7 +1838,7 @@ rw_port_checks() {
                     (( publication )) || rw_die "TCP port $port ($name) is used by another service."
                 fi
             done
-        done < <(ss -H -lntp | awk -v p="$port" '$4 ~ (":" p "$") {print}')
+        done < <(awk -v p="$port" '$4 ~ (":" p "$") {print}' "$RW_TMP/tcp-listeners")
     done < <(jq -r '.ports|to_entries[]|[.key,.value]|@tsv' "$RW_CFG"; if rw_stats_enabled; then printf 'stats_api\t%s\n' "$(rw_stats_port)"; fi)
     # Docker NAT publications can exist without a listening docker-proxy process.
     while IFS= read -r id; do
@@ -1833,7 +1869,11 @@ rw_network_check() {
       ($subnet|bounds) as $wanted | [inputs|select(test("^[0-9.]+/[0-9]+$"))|bounds] | all(.[]; .[1]<$wanted[0] or .[0]>$wanted[1])' < "$RW_TMP/networks" | grep -qx true || rw_die 'docker_subnet overlaps an existing network; specify another subnet.'
 }
 rw_preflight() {
-    rw_os; rw_resource_checks; rw_dns_checks
+    # apply already checked DNS/resources. A newly installed daemon consumes RAM,
+    # so repeat resource admission in that case before starting any containers.
+    rw_os
+    if [[ ${1:-} != --host-checked ]]; then rw_resource_checks; rw_dns_checks
+    elif [[ ${RW_DOCKER_INSTALLED:-0} == 1 ]]; then rw_resource_checks; fi
     /usr/sbin/sshd -t || rw_die 'sshd -t failed; SSH was not changed.'
     [[ $(timedatectl show -p NTPSynchronized --value) == yes ]] || rw_die 'Time synchronization could not be verified.'
     nft -j list ruleset >/dev/null || rw_die 'Cannot read the current firewall rules.'
@@ -1844,7 +1884,7 @@ rw_preflight() {
 # shellcheck shell=bash
 rw_api() {
     local method=$1 path=$2 body=${3:-} target=$4 code
-    local -a args=(--silent --show-error --connect-timeout 5 --max-time 30 --request "$method" --header 'Content-Type: application/json' --header 'X-Forwarded-Proto: https' --header 'X-Forwarded-For: 127.0.0.1')
+    local -a args=(--silent --show-error --connect-timeout 5 --max-time "${RW_API_MAX_TIME:-30}" --request "$method" --header 'Content-Type: application/json' --header 'X-Forwarded-Proto: https' --header 'X-Forwarded-For: 127.0.0.1')
     [[ -z ${RW_AUTH_CONF:-} ]] || args+=(--config "$RW_AUTH_CONF")
     [[ ${RW_AUTH_KIND:-} != admin ]] || args+=(--header 'X-Remnawave-Client-Type: browser')
     [[ -z $body ]] || args+=(--data-binary "@$body")
@@ -1862,10 +1902,25 @@ rw_auth_header() {
     RW_AUTH_KIND=${2:-api}
 }
 rw_wait_panel() {
-    local attempt
+    local deadline=$((SECONDS+${1:-120})) remaining RW_API_MAX_TIME
     RW_API_ROOT=http://127.0.0.1:$(rw_port panel_api); RW_AUTH_CONF=
-    for ((attempt=0; attempt<60; attempt++)); do rw_api GET /api/auth/status '' "$RW_TMP/status.json" 2>/dev/null && return 0; sleep 2; done
+    while (( SECONDS<deadline )); do
+        remaining=$((deadline-SECONDS)); RW_API_MAX_TIME=$((remaining<3 ? remaining : 3))
+        rw_api GET /api/auth/status '' "$RW_TMP/status.json" 2>/dev/null && return 0
+        (( SECONDS<deadline )) || break
+        sleep 1
+    done
     rw_die 'The panel did not become ready; new containers were retained for diagnostics.'
+}
+rw_wait_node() {
+    local uuid=$1 target=$2 deadline=$((SECONDS+${3:-60})) remaining RW_API_MAX_TIME
+    while (( SECONDS<deadline )); do
+        remaining=$((deadline-SECONDS)); RW_API_MAX_TIME=$((remaining<5 ? remaining : 5))
+        rw_api GET "/api/nodes/$uuid" '' "$target" && jq -e '.response.isConnected==true and .response.isDisabled==false and .response.xrayUptime>0' "$target" >/dev/null && return 0
+        (( SECONDS<deadline )) || break
+        sleep 1
+    done
+    rw_die 'The panel did not confirm a connected node and running Xray.'
 }
 rw_panel_login() {
     RW_API_ROOT=http://127.0.0.1:$(rw_port panel_api); RW_AUTH_CONF=
@@ -2099,19 +2154,20 @@ rw_apply() {
     else
         [[ ! -d $RW_OUT || -z $(find "$RW_OUT" -mindepth 1 -maxdepth 1 -print -quit) ]] || rw_die 'The directory is not empty and is not owned by the installer.'
     fi
-    rw_resource_checks; rw_dns_checks; rw_docker_install; rw_preflight
+    rw_resource_checks; rw_dns_checks; rw_docker_install; rw_preflight --host-checked
     rw_lock
     RW_MUTATING=1
     if [[ ! -f $RW_OUT/manifest.json ]]; then rw_manifest preparing; fi
-    if [[ $(jq -r '.status' "$RW_OUT/manifest.json") == preparing ]]; then rw_render; rw_manifest_set '.status="prepared"'; fi
-    if [[ $(jq -r '.status' "$RW_OUT/manifest.json") == prepared && -z $(docker ps -q --filter "label=io.pdm.remnawave.installation=$RW_OWNER") ]]; then
+    if [[ $(jq -r '.status' "$RW_OUT/manifest.json") == preparing ]]; then
+        rw_render; rw_manifest_set '.status="prepared"'
+    elif [[ $(jq -r '.status' "$RW_OUT/manifest.json") == prepared && -z $(docker ps -q --filter "label=io.pdm.remnawave.installation=$RW_OWNER") ]]; then
         # A never-started package can receive template fixes without replacing secrets or pinned images.
         rw_render_compose; rw_render_caddy; rw_install_ctl; rw_track_files
     fi
     rw_owned; rw_compose config --quiet
     rw_security_capture
     rw_info 'Pulling pinned Docker images.'
-    rw_compose --profile public --profile node pull
+    rw_pull || rw_die 'Image pull failed or exceeded 15 minutes; retry to resume cached downloads.'
     if ! rw_compose --profile public run --rm --no-deps --entrypoint caddy rw_caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile > "$RW_TMP/caddy-check.log" 2>&1; then
         cat "$RW_TMP/caddy-check.log" | rw_atomic "$RW_OUT/private/caddy-validation.log"
         rw_die 'Caddy configuration validation failed before publication. See private/caddy-validation.log.'
@@ -2137,9 +2193,10 @@ rw_apply() {
     fi
     rw_existing_caddy_apply
     rw_info 'Starting Caddy/MFA and the public subscription page.'
-    rw_compose --profile public up -d rw_caddy
-    [[ $RW_ROLE == node ]] || rw_compose --profile public up -d rw_subscription
-    if [[ $RW_ROLE != panel ]]; then rw_compose --profile node up -d rw_node; fi
+    local -a services=(rw_caddy)
+    [[ $RW_ROLE == node ]] || services+=(rw_subscription)
+    [[ $RW_ROLE == panel ]] || services+=(rw_node)
+    rw_compose --profile public --profile node up -d "${services[@]}"
     rw_manifest_set '.status="running-awaiting-acceptance"'
     rw_doctor
     rw_security_apply
@@ -2289,16 +2346,19 @@ rw_tokens_rotate() {
 }
 # shellcheck shell=bash
 rw_track_files() {
-    local file relative sum
-    : > "$RW_TMP/managed.jsonl"
+    local file relative
+    local -a paths=()
     while IFS= read -r relative; do
         [[ -n $relative && $relative != manifest.json && $relative != .rw.lock && $relative != /* && $relative != *'..'* ]] || continue
         file=$RW_OUT/$relative
         [[ -f $file && ! -L $file ]] || continue
-        sum=$(sha256sum "$file" | cut -d' ' -f1)
-        jq -n --arg path "$relative" --arg sum "$sum" '{path:$path,sha256:$sum}' >> "$RW_TMP/managed.jsonl"
+        paths+=("$relative")
     done < <({ [[ ! -f $RW_OUT/private/.managed-paths ]] || cat "$RW_OUT/private/.managed-paths"; jq -r '.managed_files[].path' "$RW_OUT/manifest.json"; printf '%s\n' 'private/.managed-paths'; } | LC_ALL=C sort -u)
-    jq -s '.' "$RW_TMP/managed.jsonl" > "$RW_TMP/managed.json"
+    : > "$RW_TMP/managed.sums"
+    if (( ${#paths[@]} )); then
+        (cd -- "$RW_OUT" && sha256sum --zero -- "${paths[@]}") > "$RW_TMP/managed.sums" || rw_die 'Cannot hash managed files.'
+    fi
+    jq -Rs 'split("\u0000")|map(select(length>0)|{path:.[66:],sha256:.[0:64]})' "$RW_TMP/managed.sums" > "$RW_TMP/managed.json"
     rw_manifest_set '.managed_files=$files[0]' --slurpfile files "$RW_TMP/managed.json"
 }
 rw_verify_files() {
@@ -2306,7 +2366,7 @@ rw_verify_files() {
     while IFS=$'\t' read -r path sum; do
         [[ $path != /* && $path != *'..'* && $path != *$'\n'* ]] || rw_die 'Unsafe path in the manifest.'
         parent=$RW_OUT/$path
-        while [[ $parent != "$RW_OUT" ]]; do [[ ! -L $parent ]] || rw_die 'A managed path contains a symbolic link.'; parent=$(dirname -- "$parent"); done
+        while [[ $parent != "$RW_OUT" ]]; do [[ ! -L $parent ]] || rw_die 'A managed path contains a symbolic link.'; parent=${parent%/*}; done
         [[ -f $RW_OUT/$path && $(sha256sum "$RW_OUT/$path" | cut -d' ' -f1) == "$sum" ]] || rw_die "Managed file $path changed; review is required."
     done < <(jq -r '.managed_files[]|[.path,.sha256]|@tsv' "$RW_OUT/manifest.json")
 }
@@ -2316,44 +2376,47 @@ rw_doctor() {
     printf 'null\n' > "$RW_TMP/doctor-mfa.json"
     rw_owned; rw_docker_ownership
     [[ $(jq -r '.status' "$RW_OUT/manifest.json") != node-prepared-awaiting-attachment ]] || rw_die 'The node is prepared but is not attached to a panel yet.'
+    rw_compose --profile public --profile node ps --services --status running > "$RW_TMP/running-services" || rw_die 'Cannot list running services.'
     while IFS= read -r service; do
-        [[ -n $(rw_compose --profile public --profile node ps -q "$service") ]] || rw_die "Running service $service is missing."
+        grep -Fxq "$service" "$RW_TMP/running-services" || rw_die "Running service $service is missing."
     done < <(jq -r '.services|keys[]' "$RW_OUT/compose.json")
     [[ $(stat -c %a "$RW_OUT/private") == 700 ]] || rw_die 'private/ must have mode 0700.'
     while IFS= read -r -d '' id; do [[ $(stat -c %a "$id") == 600 ]] || rw_die 'A secret file has overly permissive permissions.'; done < <(find "$RW_OUT/private" -type f -print0)
-    while IFS= read -r id; do
-        [[ -n $id ]] || continue
-        state=$(docker inspect --format '{{.State.Status}}' "$id"); service=$(docker inspect --format '{{index .Config.Labels "com.docker.compose.service"}}' "$id")
+    local -a ids=()
+    docker ps -aq --filter "label=io.pdm.remnawave.installation=$RW_OWNER" > "$RW_TMP/doctor-ids" || rw_die 'Cannot list owned containers.'
+    mapfile -t ids < "$RW_TMP/doctor-ids"
+    (( ${#ids[@]} )) || rw_die 'No owned containers are running.'
+    docker inspect --format '{{.Id}} {{index .Config.Labels "com.docker.compose.service"}} {{.State.Status}} {{with index .State "Health"}}{{.Status}}{{else}}none{{end}}' "${ids[@]}" > "$RW_TMP/doctor-states" || rw_die 'Cannot inspect container health.'
+    local health
+    while read -r id service state health; do
         [[ $state == running ]] || rw_die "Service $service is in state $state."
+        state=$health
         for ((attempts=0; attempts<60; attempts++)); do
-            state=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$id")
             [[ $state == starting ]] || break
             sleep 2
+            state=$(docker inspect --format '{{with index .State "Health"}}{{.Status}}{{else}}none{{end}}' "$id")
         done
         [[ $state == healthy || $state == none ]] || rw_die "Healthcheck $service: $state."
-    done < <(docker ps -aq --filter "label=io.pdm.remnawave.installation=$RW_OWNER")
+    done < "$RW_TMP/doctor-states"
     if [[ $RW_ROLE != node ]]; then
-        rw_wait_panel; rw_panel_login
+        rw_wait_panel
         rw_tokens_status > "$RW_TMP/doctor-tokens.jsonl" || rw_die 'Panel tokens need recovery: run rwctl tokens rotate.'
         rw_mfa_status > "$RW_TMP/doctor-mfa.json"
         while IFS= read -r node_uuid; do
-            for ((attempts=0; attempts<30; attempts++)); do
-                rw_api GET "/api/nodes/$node_uuid" '' "$RW_TMP/node-health.json" && jq -e '.response.isConnected==true and .response.isDisabled==false and .response.xrayUptime>0' "$RW_TMP/node-health.json" >/dev/null && break
-                sleep 2
-            done
-            jq -e '.response.isConnected==true and .response.isDisabled==false and .response.xrayUptime>0' "$RW_TMP/node-health.json" >/dev/null || rw_die 'The panel did not confirm a connected node and running Xray.'
+            rw_wait_node "$node_uuid" "$RW_TMP/node-health.json"
         done < <(jq -r '.nodes[].node_uuid' "$RW_OUT/inventory.json")
     fi
     jq -n --arg e "$RW_ENV" --arg role "$RW_ROLE" --slurpfile tokens "$RW_TMP/doctor-tokens.jsonl" --slurpfile mfa "$RW_TMP/doctor-mfa.json" '{schema_version:1,environment_id:$e,role:$role,containers_running:true,client_acceptance_required:true,tokens:$tokens,mfa:$mfa[0]}'
 }
 rw_resource_plan() {
-    local kind=$1 command=$2 expression=$3 id owner
-    while IFS= read -r id; do
-        [[ -n $id ]] || continue
-        owner=$(docker inspect --type "$kind" --format "$expression" "$id")
-        [[ $owner == "$RW_OWNER" ]] || rw_die 'The Docker resource belongs to another installation.'
-        printf '%s\n' "$id"
-    done < <(docker "$command" ls -q --filter "label=com.docker.compose.project=$RW_PROJECT")
+    local kind=$1
+    local -a ids=()
+    docker "$kind" ls -q --filter "label=com.docker.compose.project=$RW_PROJECT" > "$RW_TMP/$kind-ids" || rw_die 'Cannot list Docker resources.'
+    mapfile -t ids < "$RW_TMP/$kind-ids"
+    (( ${#ids[@]} )) || return 0
+    docker inspect --type "$kind" --format '{{json .Labels}}' "${ids[@]}" > "$RW_TMP/$kind-labels.jsonl" || rw_die 'Cannot inspect Docker resources.'
+    jq -se --arg owner "$RW_OWNER" --argjson count "${#ids[@]}" 'length==$count and all(.[]; .["io.pdm.remnawave.installation"]==$owner)' "$RW_TMP/$kind-labels.jsonl" >/dev/null || rw_die 'The Docker resource belongs to another installation.'
+    printf '%s\n' "${ids[@]}" | LC_ALL=C sort
 }
 rw_uninstall() {
     rw_owned
@@ -2367,8 +2430,8 @@ rw_uninstall() {
         docker info >/dev/null 2>&1 || rw_die 'Docker is unavailable; installation files were retained.'
         rw_docker_ownership
         docker ps -aq --filter "label=io.pdm.remnawave.installation=$RW_OWNER" | jq -Rn '[inputs|select(length>0)]' > "$RW_TMP/containers.json"
-        rw_resource_plan network network '{{index .Labels "io.pdm.remnawave.installation"}}' > "$RW_TMP/networks"
-        rw_resource_plan volume volume '{{index .Labels "io.pdm.remnawave.installation"}}' > "$RW_TMP/volumes"
+        rw_resource_plan network > "$RW_TMP/networks"
+        rw_resource_plan volume > "$RW_TMP/volumes"
     fi
     rw_verify_files
     if [[ ${RW_DRY_RUN:-0} == 1 ]]; then
@@ -2386,6 +2449,9 @@ rw_uninstall() {
         docker ps -aq --filter "label=io.pdm.remnawave.installation=$RW_OWNER" | jq -Rn '[inputs|select(length>0)]|sort' > "$RW_TMP/current-containers.json"
         jq 'sort' "$RW_TMP/containers.json" > "$RW_TMP/planned-containers.json"
         cmp -s "$RW_TMP/current-containers.json" "$RW_TMP/planned-containers.json" || rw_die 'The container inventory changed after confirmation.'
+        rw_resource_plan network > "$RW_TMP/current-networks"
+        rw_resource_plan volume > "$RW_TMP/current-volumes"
+        cmp -s "$RW_TMP/networks" "$RW_TMP/current-networks" && cmp -s "$RW_TMP/volumes" "$RW_TMP/current-volumes" || rw_die 'The network or volume inventory changed after confirmation.'
     fi
     if [[ -f $RW_OUT/private/security-state.json && $(jq -r '.status' "$RW_OUT/private/security-state.json") == armed ]]; then
         rw_security_revert
@@ -2407,11 +2473,16 @@ rw_uninstall() {
         docker exec "$container" caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null
     fi
     local id
-    while IFS= read -r id; do docker stop -t 30 "$id" >/dev/null; docker rm "$id" >/dev/null; done < <(jq -r '.[]' "$RW_TMP/containers.json")
+    local -a containers=()
+    mapfile -t containers < <(jq -r '.[]' "$RW_TMP/containers.json")
+    if (( ${#containers[@]} )); then
+        docker stop -t 30 "${containers[@]}" >/dev/null
+        docker rm "${containers[@]}" >/dev/null
+    fi
     while IFS= read -r id; do [[ -z $id ]] || docker network rm "$id" >/dev/null; done < "$RW_TMP/networks"
     if [[ ${RW_PURGE:-0} == 1 ]]; then while IFS= read -r id; do [[ -z $id ]] || docker volume rm "$id" >/dev/null; done < "$RW_TMP/volumes"; fi
     if [[ $(jq -r '.ufw_rules_added // false' "$RW_OUT/manifest.json") == true ]]; then
-        while IFS= read -r id; do ufw --force delete "$id" >/dev/null; done < <(ufw status numbered | awk -v tag="# $RW_PROJECT" 'index($0,tag) {gsub(/[][]/,"",$1);print $1}' | sort -rn)
+        rw_security_remove_rules
     fi
     if [[ $(jq -r '.firewall_installed // false' "$RW_OUT/manifest.json") == true ]]; then
         local unit=/etc/systemd/system/$RW_PROJECT-firewall.service
@@ -2470,13 +2541,9 @@ rw_node_attach() {
     RW_MUTATING=1
     rw_register_node "$RW_TMP/node-config.json" "$RW_TMP/connection.json" "$(jq -r '.management_address' "$RW_TMP/node-config.json")" "$RW_TMP/remote-profile.json"
     ssh "${ssh_options[@]}" "$host" "${prefix}bash '$remote/rwctl' node receive --output '$remote'" < "$RW_TMP/connection.json"
-    local uuid attempt
+    local uuid
     uuid=$(jq -er '.node_uuid' "$RW_TMP/connection.json")
-    for ((attempt=0; attempt<30; attempt++)); do
-        rw_api GET "/api/nodes/$uuid" '' "$RW_TMP/attached-node.json" && jq -e '.response.isConnected==true and .response.isDisabled==false and .response.xrayUptime>0' "$RW_TMP/attached-node.json" >/dev/null && break
-        sleep 2
-    done
-    jq -e '.response.isConnected==true and .response.isDisabled==false and .response.xrayUptime>0' "$RW_TMP/attached-node.json" >/dev/null || rw_die 'The panel did not confirm a connected node and running Xray.'
+    rw_wait_node "$uuid" "$RW_TMP/attached-node.json"
     rw_info 'Node attached. Existing users were not granted access automatically.'
 }
 rw_node_receive() {
@@ -2643,7 +2710,7 @@ rw_restore() {
     rw_preflight
     RW_STATS_SOURCE_MANIFEST=
     rw_restore_files
-    rw_compose --profile public --profile node pull
+    rw_pull || rw_die 'Restore image pull failed or exceeded 15 minutes; retry to resume cached downloads.'
     rw_stats_patch
     rw_stop_writers; rw_restore_data "$RW_BACKUP"
     rw_firewall; rw_existing_caddy_apply
@@ -2753,13 +2820,17 @@ rw_upgrade() {
     if [[ $RW_ROLE != node && $(jq -r '.components.panel.image' "$RW_OUT/versions.lock.json") != $(jq -r '.components.panel.image' "$RW_TMP/upgrade-lock.json") ]]; then
         [[ $(rw_compose exec -T rw_db psql -At -U postgres -d remnawave -c "SELECT EXISTS(SELECT FROM information_schema.schemata WHERE schema_name='pdm_stats')") == f ]] || rw_die 'Updating a panel with pdm_stats requires a verified statistics migration.'
     fi
-    docker compose --project-directory "$RW_OUT" --project-name "$RW_PROJECT" -f "$RW_TMP/upgrade-compose.json" --profile public --profile node pull || rw_die 'Upgrade images could not be pulled; current services were not stopped.'
+    local -a pull_services=()
+    case ${RW_COMPONENT:-all} in all) :;; caddy) pull_services=(rw_caddy);; *) pull_services=("rw_$RW_COMPONENT");; esac
+    timeout --foreground 900 docker compose --project-directory "$RW_OUT" --project-name "$RW_PROJECT" -f "$RW_TMP/upgrade-compose.json" --profile public --profile node pull --policy missing "${pull_services[@]}" || rw_die 'Upgrade image pull failed or exceeded 15 minutes; current services were not stopped.'
     # Validate against isolated Caddy stores; a candidate cannot migrate live MFA state before backup.
-    local validation
-    validation=$(mktemp -d "$RW_TMP/validation.XXXXXX")
-    mkdir "$validation/data" "$validation/config" || rw_die 'Cannot create isolated validation storage.'
-    jq --arg data "$validation/data" --arg config "$validation/config" '.services.rw_caddy.network_mode="none" | .services.rw_caddy.volumes|=map(if startswith("caddy_data:") then $data+":/data" elif startswith("caddy_config:") then $config+":/config" else . end)' "$RW_TMP/upgrade-compose.json" > "$RW_TMP/validate-compose.json"
-    docker compose --project-directory "$RW_OUT" --project-name "$RW_PROJECT" -f "$RW_TMP/validate-compose.json" --profile public run --rm --no-deps --entrypoint caddy rw_caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile > "$RW_TMP/candidate-validation.log" 2>&1 || rw_die 'Candidate Caddy validation failed; the current stack was not stopped.'
+    if [[ ${RW_COMPONENT:-all} != node && ${RW_COMPONENT:-all} != subscription ]]; then
+        local validation
+        validation=$(mktemp -d "$RW_TMP/validation.XXXXXX")
+        mkdir "$validation/data" "$validation/config" || rw_die 'Cannot create isolated validation storage.'
+        jq --arg data "$validation/data" --arg config "$validation/config" '.services.rw_caddy.network_mode="none" | .services.rw_caddy.volumes|=map(if startswith("caddy_data:") then $data+":/data" elif startswith("caddy_config:") then $config+":/config" else . end)' "$RW_TMP/upgrade-compose.json" > "$RW_TMP/validate-compose.json"
+        docker compose --project-directory "$RW_OUT" --project-name "$RW_PROJECT" -f "$RW_TMP/validate-compose.json" --profile public run --rm --no-deps --entrypoint caddy rw_caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile > "$RW_TMP/candidate-validation.log" 2>&1 || rw_die 'Candidate Caddy validation failed; the current stack was not stopped.'
+    fi
     RW_MUTATING=1
     # Freeze writers for a rollback point that does not discard concurrent user edits.
     if [[ ${RW_COMPONENT:-all} != node && ${RW_COMPONENT:-all} != subscription ]]; then rw_stop_writers; fi
@@ -3344,7 +3415,7 @@ rw_main() {
     [[ -z $RW_ROLE_ARG || $RW_ROLE_ARG == "$RW_ROLE" ]] || rw_die 'The role does not match the configuration.'
     case $command in
       plan) rw_plan;;
-      setup|apply) if (( RW_DRY_RUN )); then rw_plan; else rw_deps; rw_apply; rw_track_files; fi;;
+      setup|apply) if (( RW_DRY_RUN )); then rw_plan; else [[ $command == setup ]] || rw_deps; rw_apply; rw_track_files; fi;;
       preflight) rw_preflight;;
       doctor) rw_doctor;;
       info) rw_show_summary;;

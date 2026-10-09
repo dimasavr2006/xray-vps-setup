@@ -21,16 +21,19 @@ rw_dns_addresses() {
     jq -Rn -f "$RW_TMP/address-dns.jq" < "$RW_TMP/address-dns.txt"
 }
 rw_detect_addresses() {
-    local family address url
+    local family url pid
+    local -a pids=()
     : > "$RW_TMP/detected-addresses.txt"
     ip -j address show scope global > "$RW_TMP/interfaces.json" 2>/dev/null || printf '[]\n' > "$RW_TMP/interfaces.json"
     jq -r '.[]|select(.ifname|test("^(lo|docker|br-|veth|virbr|pdm-)" )|not)|.addr_info[]?|select(.scope=="global" and .preferred_life_time!=0)|.local' "$RW_TMP/interfaces.json" >> "$RW_TMP/detected-addresses.txt"
     for family in 4 6; do
         if [[ $family == 4 ]]; then url=https://api.ipify.org; else url=https://api6.ipify.org; fi
-        if address=$(curl -"$family" -fsS --proto '=https' --connect-timeout 2 --max-time 4 --max-filesize 128 "$url" 2>/dev/null); then
-            printf '%s\n' "$address" >> "$RW_TMP/detected-addresses.txt"
-        fi
+        # Independent family probes share a four-second deadline, not two serial waits.
+        (curl -"$family" -fsS --proto '=https' --connect-timeout 2 --max-time 4 --max-filesize 128 "$url" > "$RW_TMP/echo-ip$family" 2>/dev/null || : > "$RW_TMP/echo-ip$family") &
+        pids+=("$!")
     done
+    for pid in "${pids[@]}"; do wait "$pid"; done
+    for family in 4 6; do cat "$RW_TMP/echo-ip$family" >> "$RW_TMP/detected-addresses.txt"; printf '\n' >> "$RW_TMP/detected-addresses.txt"; done
     { rw_address_jq; cat <<'RW_PUBLIC_JQ'
 [inputs|select(ip)|ipnorm|select(
  if contains(":") then test("^[23]")
