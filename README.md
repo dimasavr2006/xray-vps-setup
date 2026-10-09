@@ -1,40 +1,39 @@
 # xray-vps-setup
-VLESS со своим доменом. А что еще нужно для счастья?
 
-Новый Linux-установщик Remnawave с отдельными установкой/удалением и
-backup/restore/upgrade доступен в [remnawave/](remnawave/README.md).
-Первый целевой сервер — Debian 13 amd64. Корневые команды ниже сохраняют Marzneshin.
+VPS installers for VLESS with a domain and a Confluence cover page.
 
-В данном варианте VLESS слушает на 443 и принимает все запросы, делая запрос на локальный Caddy только для сертификатов. В таком варианте задержка будет меньше, чем в варианте с Caddy/NGINX перед VLESS, где происходит множество лишних запросов.
+## Remnawave
 
-## Скрипт
+The new Linux/Bash/Docker installer supports a panel, a standalone node or
+both. Its current supported server is Debian 13 amd64. See
+[the Remnawave guide](remnawave/README.md) for the wizard, MFA, component
+updates and backup/recovery.
 
-- Установит Marzneshin + Marznode (или только ноду). Для маскировки используется [Confluence](https://github.com/Jolymmiles/confluence-marzban-home)
-- Настроит VLESS Reality (TCP/443), опционально XHTTP (TCP/8443) и Hysteria2 (UDP/8443)
-- Поднимет Caddy для selfsteal
-- Создаст админа панели и зарегистрирует локальную ноду (в полной установке)
-- По желанию настроит безопасность сервера:
-- - UFW (SSH, 80, 443, при необходимости 8443 и gRPC)
-- - Пользователя для SSH, запретив вход от рута
-- - SSH-ключ, запретив вход по паролю
+```bash
+bash <(wget -qO- https://raw.githubusercontent.com/dimasavr2006/xray-vps-setup/refs/heads/main/remnawave/rw-setup.sh)
+```
 
-## Установка
+```bash
+bash <(wget -qO- https://raw.githubusercontent.com/dimasavr2006/xray-vps-setup/refs/heads/main/remnawave/uninstall.sh)
+```
+
+## Legacy Marzneshin installer
+
+Root-level commands install Marzneshin, Marznode and Caddy, or a standalone
+Marznode. They configure VLESS Reality (TCP/443), optional XHTTP (TCP/8443)
+and Hysteria2 (UDP/8443), a Confluence cover, and optional UFW/SSH hardening.
+Full installation creates an administrator and registers the local node.
 
 ```bash
 bash <(wget -qO- https://raw.githubusercontent.com/dimasavr2006/xray-vps-setup/refs/heads/main/vps-setup.sh)
 ```
 
-Режимы установки:
-- **1** — Полная установка (Marzneshin + Marznode + Caddy)
-- **2** — Только нода (Marznode для удалённой панели и Caddy для selfsteal)
-
-После установки скрипт выводит:
-- Ссылку на панель и данные для входа (режим 1)
-- Данные для добавления ноды во внешнюю панель (режим 2)
-- Reality Public Key / Short ID, а также параметры XHTTP/Hysteria2 (если включены)
-
-## Удаление
+Select mode 1 for the full stack or mode 2 for a remote-panel node. The script
+prints connection information and the enabled transport parameters.
 
 ```bash
 bash <(wget -qO- https://raw.githubusercontent.com/dimasavr2006/xray-vps-setup/refs/heads/main/uninstall.sh)
 ```
+
+The legacy scripts retain their existing behavior. Cover layout:
+[confluence-marzban-home](https://github.com/Jolymmiles/confluence-marzban-home).

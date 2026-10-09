@@ -2,7 +2,7 @@
 rw_tls_cleanup() {
     local id=${RW_TLS_CONTAINER:-}
     if [[ -n $id ]] && docker inspect "$id" >/dev/null 2>&1; then
-        [[ $(docker inspect --format '{{index .Config.Labels "io.pdm.remnawave.tls-test"}}' "$id") == "$RW_OWNER" ]] || rw_die 'Чужой контейнер проверки TLS.'
+        [[ $(docker inspect --format '{{index .Config.Labels "io.pdm.remnawave.tls-test"}}' "$id") == "$RW_OWNER" ]] || rw_die 'The TLS test container belongs to another installation.'
         docker rm -f "$id" >/dev/null
     fi
     RW_TLS_CONTAINER=
@@ -10,7 +10,7 @@ rw_tls_cleanup() {
 rw_tls_restore_proxy() {
     [[ ${RW_TLS_PROXY_PENDING:-0} == 1 ]] || return 0
     cat "$RW_OUT/private/tls-caddy.before" > "$RW_OUT/Caddyfile"
-    docker exec "$RW_TLS_MAIN_CADDY" caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null || rw_die 'Не удалось вернуть HTTP config после TLS test.'
+    docker exec "$RW_TLS_MAIN_CADDY" caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null || rw_die 'Cannot restore the HTTP configuration after the TLS test.'
     RW_TLS_PROXY_PENDING=0
 }
 rw_tls_forward_challenge() {
@@ -32,29 +32,29 @@ rw_tls_forward_challenge() {
           }
           active && $0=="}" {active=0}
           {print}
-          END {if(changed!=1) exit 42}' "$candidate" > "$RW_TMP/tls-caddy.site" || rw_die 'Не удалось подготовить HTTP challenge route.'
+          END {if(changed!=1) exit 42}' "$candidate" > "$RW_TMP/tls-caddy.site" || rw_die 'Cannot prepare the HTTP challenge route.'
         cat "$RW_TMP/tls-caddy.site" > "$candidate"
     done < <(jq -r '.domains|[.[]]|unique[]' "$RW_CFG")
     RW_TLS_MAIN_CADDY=$(rw_compose --profile public ps -q rw_caddy)
     docker cp "$candidate" "$RW_TLS_MAIN_CADDY:/tmp/pdm-tls-test.Caddyfile"
-    docker exec "$RW_TLS_MAIN_CADDY" caddy validate --config /tmp/pdm-tls-test.Caddyfile --adapter caddyfile > "$RW_TMP/tls-forward-check.log" 2>&1 || rw_die 'HTTP challenge route не прошёл проверку.'
+    docker exec "$RW_TLS_MAIN_CADDY" caddy validate --config /tmp/pdm-tls-test.Caddyfile --adapter caddyfile > "$RW_TMP/tls-forward-check.log" 2>&1 || rw_die 'HTTP challenge route validation failed.'
     RW_TLS_PROXY_PENDING=1
     cat "$candidate" > "$RW_OUT/Caddyfile"
-    docker exec "$RW_TLS_MAIN_CADDY" caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null || rw_die 'HTTP challenge route не применён.'
+    docker exec "$RW_TLS_MAIN_CADDY" caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null || rw_die 'The HTTP challenge route was not applied.'
 }
 rw_tls_get_certificate() {
     local domain=$1 output=$2 attempt
     for attempt in {1..90}; do
         { openssl s_client -connect "127.0.0.1:$RW_TLS_HTTPS" -servername "$domain" </dev/null 2>/dev/null || true; } | openssl x509 -outform PEM > "$output" 2>/dev/null || true
         if [[ -s $output ]] && openssl x509 -in "$output" -noout -issuer | grep -qi staging; then
-            openssl x509 -in "$output" -noout -checkhost "$domain" >/dev/null || rw_die 'SNI staging-сертификата не совпал.'
+            openssl x509 -in "$output" -noout -checkhost "$domain" >/dev/null || rw_die 'The staging certificate does not match the SNI.'
             return 0
         fi
         sleep 2
     done
     docker logs "$RW_TLS_CONTAINER" > "$RW_OUT/private/tls-test-error.log" 2>&1
     chmod 600 "$RW_OUT/private/tls-test-error.log"
-    rw_die 'Staging-сертификат не получен; диагностика private/tls-test-error.log.'
+    rw_die 'Staging certificate acquisition failed; see private/tls-test-error.log.'
 }
 rw_tls_launch() {
     RW_TLS_CONTAINER=$(docker run -d --rm --network host --memory 96m --memory-swap 96m --cpus 0.5 \
@@ -65,12 +65,12 @@ rw_tls_launch() {
 rw_tls_test() {
     rw_owned; rw_verify_files
     RW_TLS_HTTP=${RW_TLS_HTTP:-18082}; RW_TLS_HTTPS=${RW_TLS_HTTPS:-19447}
-    [[ $RW_TLS_HTTP =~ ^[0-9]+$ && $RW_TLS_HTTPS =~ ^[0-9]+$ ]] && (( RW_TLS_HTTP>=1024 && RW_TLS_HTTP<=65535 && RW_TLS_HTTPS>=1024 && RW_TLS_HTTPS<=65535 && RW_TLS_HTTP!=RW_TLS_HTTPS )) || rw_die 'TLS test ports: разные числа 1024..65535.'
+    [[ $RW_TLS_HTTP =~ ^[0-9]+$ && $RW_TLS_HTTPS =~ ^[0-9]+$ ]] && (( RW_TLS_HTTP>=1024 && RW_TLS_HTTP<=65535 && RW_TLS_HTTPS>=1024 && RW_TLS_HTTPS<=65535 && RW_TLS_HTTP!=RW_TLS_HTTPS )) || rw_die 'TLS test ports must be distinct integers from 1024 to 65535.'
     if (( RW_DRY_RUN )); then jq '.domains|[.[]]|unique|{domains:.,staging_only:true,shared_http_challenge_storage:true,read_only:true}' "$RW_CFG"; return; fi
     rw_root; rw_os; rw_lock; rw_docker_ownership; rw_ssh_idle
-    [[ -n $(rw_compose --profile public ps -q rw_caddy) ]] || rw_die 'Для TLS test нужен работающий основной Caddy.'
-    [[ -z $(ss -H -lnt "sport = :$RW_TLS_HTTP") && -z $(ss -H -lnt "sport = :$RW_TLS_HTTPS") ]] || rw_die 'Порты TLS test заняты.'
-    [[ $(docker volume inspect "${RW_PROJECT}_caddy_data" --format '{{index .Labels "io.pdm.remnawave.installation"}}') == "$RW_OWNER" ]] || rw_die 'Caddy storage принадлежит другой установке.'
+    [[ -n $(rw_compose --profile public ps -q rw_caddy) ]] || rw_die 'A running primary Caddy container is required for the TLS test.'
+    [[ -z $(ss -H -lnt "sport = :$RW_TLS_HTTP") && -z $(ss -H -lnt "sport = :$RW_TLS_HTTPS") ]] || rw_die 'TLS test ports are already in use.'
+    [[ $(docker volume inspect "${RW_PROJECT}_caddy_data" --format '{{index .Labels "io.pdm.remnawave.installation"}}') == "$RW_OWNER" ]] || rw_die 'Caddy storage belongs to another installation.'
     RW_TLS_IMAGE=$(jq -r '.components.caddy_auth.image' "$RW_OUT/versions.lock.json")
     mkdir "$RW_TMP/tls-config"
     {
@@ -92,7 +92,7 @@ rw_tls_test() {
         rw_tls_launch
         rw_tls_get_certificate "$domain" "$RW_TMP/$domain.second.pem"
         second=$(openssl x509 -in "$RW_TMP/$domain.second.pem" -noout -serial)
-        [[ $first != "$second" ]] || rw_die 'Staging-сертификат не перевыпущен.'
+        [[ $first != "$second" ]] || rw_die 'The staging certificate was not reissued.'
         jq -nc --arg domain "$domain" --arg before "$first" --arg after "$second" '{domain:$domain,staging_reissue:true,serial_before:$before,serial_after:$after}' >> "$RW_TMP/tls-results.jsonl"
     done < <(jq -r '.domains|[.[]]|unique[]' "$RW_CFG")
     rw_tls_cleanup

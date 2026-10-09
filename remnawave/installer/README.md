@@ -1,302 +1,71 @@
-# Установщик Remnawave: Linux, Bash и Docker Compose
+# Installer source and verification
 
-На VPS установщик выполняет обычные команды APT, Docker Compose, curl, jq,
-OpenSSL и nftables. Python-код и упакованный Python-runtime удалены из точки
-входа. `rw-setup.sh` и `uninstall.sh` — самодостаточные читаемые Bash-файлы.
+See the published [user guide](../README.md) for installation, wizard
+questions, cover selection and component updates. In the public repository the
+same guide is `../README.md`.
 
-Код развёртывания реализован. Локально проверены реальные контейнеры Panel
-3.4.5, Node 3.4.2, PostgreSQL, Valkey и subscription-page, административный API,
-регистрация профиля/ноды/Hosts/squads, штатный SECRET_KEY и Caddy Auth/MFA.
-На FI Debian 13 прошли внешние HTTPS/TCP/XHTTP, подписки и перевыпуск
-сертификата через ACME staging. В чистом Debian 13 WSL с собственным Docker
-прошли три роли, SSH/sudo-подключение отдельной ноды, восстановление,
-обновление и откат базы. WSL-проверка не заменяет чистый VPS с публичным DNS.
-MFA владельца на FI привязан и проверен. Наблюдение остановлено по решению
-владельца после 85 выборок без ошибок; 48 часов не завершены.
+`bash/` contains the Bash implementation. `config.jq` validates and normalizes
+the public configuration. `addresses.sh` detects and confirms IPs/DNS;
+`site.sh` manages the Confluence/custom cover. `templates/` and
+`versions.lock.json` are embedded into the generated entrypoints.
+`../stats/` contains the optional interval-accounting addon.
 
-## Запуск
-
-Первый целевой VPS — Debian 13 amd64. Установка выполняется от root.
-Устанавливаются только необходимые пакеты; Docker берётся из официального
-APT-репозитория. Автоматические full-upgrade, reboot, смена SSH и BBR отсутствуют.
-
-Формат запуска нового комплекта:
-
-```bash
-bash <(wget -qO- https://raw.githubusercontent.com/dimasavr2006/xray-vps-setup/refs/heads/main/remnawave/rw-setup.sh)
-bash <(wget -qO- https://raw.githubusercontent.com/dimasavr2006/xray-vps-setup/refs/heads/main/remnawave/uninstall.sh)
-```
-
-Новый комплект размещается в `remnawave/`. Старые корневые скрипты Marzneshin
-сохраняют прежнее поведение. Выпуск остаётся тестовым до завершения приёмки.
-
-Из локальной копии:
-
-```bash
-bash rw-setup.sh
-bash rw-setup.sh --role panel-node --config /private/install.json
-bash rw-setup.sh --config /private/install.json --dry-run
-```
-
-Без config скрипт спрашивает роль, домены, IP и данные администратора. Пароли
-генерируются, а не вводятся в публичный JSON. По умолчанию установка находится
-в `/opt/pdm-remnawave/<environment_id>`. Другой каталог задаётся через `--output`.
-Предварительный `--dry-run` требует только установленного jq и не запускает сервисы.
-
-Мастер поддерживает `fi-parallel`: спрашивает Caddyfile действующего сайта,
-имя его контейнера, HTTPS URL проверки и профиль ресурсов. Для этого режима
-по умолчанию предлагается compact-test. У чистой установки назначение
-по умолчанию production; для небольшого стенда выберите test.
-
-## Что делает установка
-
-1. Проверяет ОС/архитектуру, DNS A/AAAA, ресурсы, время, SSH-конфигурацию,
-   firewall, занятые TCP-порты IPv4/IPv6, публикации Docker NAT и subnet.
-2. Создаёт секреты один раз и структурированные конфиги через jq.
-3. Загружает образы по закреплённым digest и проверяет Caddyfile.
-4. Устанавливает собственные правила nftables до запуска открываемых сервисов.
-5. Запускает PostgreSQL, Valkey и панель через `docker compose up -d --wait`.
-6. Создаёт первого администратора через закрытый API, выпускает ограниченные
-   служебные токены для установщика и subscription-page.
-7. Через API создаёт профиль Xray, запись ноды, Hosts и отдельные TCP/XHTTP squads.
-8. Получает настоящий SECRET_KEY панели, запускает Caddy и ноду, проверяет здоровье.
-
-JSON профиля Xray служит входом для API. Он не монтируется в ноду и не конкурирует
-с конфигурацией, которую отправляет Remnawave. Новые пользователи и назначения
-доступа существующим аккаунтам установщиком не создаются.
-
-Данные администратора: `private/admin.json`; отдельный пароль Caddy Auth:
-`auth_password` в `private/secrets.json`. Владелец завершает MFA при первом входе.
-Caddy защищает административный сайт. Панель и подписки могут использовать один
-домен: тогда публичные подписки получают отдельный HTTPS-порт `9444`
-(`ports.subscription_https`). CORS содержит полный HTTPS origin с портом.
-
-Пароль Caddy Auth и пароль Remnawave различаются. `/r` открывает защитный
-портал Caddy, затем переходите в `/dashboard/home` для самой панели. При
-сохранённой сессии Remnawave её пароль повторно не спрашивается. MFA не
-заменяет учётную запись панели. Подписки административного входа не требуют.
-
-Можно указать `panel.example.com`, `sub.example.com` и `cover.example.com`
-с одинаковыми A/AAAA: Caddy выбирает сайт по домену, а установщик согласует
-URL подписок, CORS, redirect и Reality SNI. На одной машине с VPN по 443
-панель/подписки по умолчанию используют 9443; для одинакового домена подписки
-используют 9444. Панель без VPN может обслуживать разные сайты по 443.
-В текущем параллельном FI внешний 443 занят прежней системой. Произвольная
-замена домена или пути в адресной строке не меняет конфигурацию сервера;
-используйте заранее настроенный домен и штатные пути каждого сайта.
-
-## Роли и параметры
-
-Примеры: [panel](examples/panel.json), [node](examples/node.json),
-[panel-node](examples/panel-node.json), [FI parallel](examples/fi-parallel.json),
-[FI compact с одним доменом](examples/fi-compact-single-domain.json).
-Это примеры с зарезервированными IP/доменами, не готовые параметры production.
-
-Основные поля: `schema_version: 1`, `environment_id` (3–20 строчных букв,
-цифр и дефисов), `role`, `network_mode`, `domains`, `public_addresses`,
-`panel_addresses`, `admin`, `ports`, `resources`, `docker_subnet`, `acme`,
-`node_country`, `existing_caddy`.
-
-| Режим | Панель HTTPS | Reality / XHTTP | API ноды | HTTP |
-| --- | --- | --- | --- | --- |
-| panel | 443 | — | — | 80 |
-| node | — | 443 / 8443 | 2222 | 80 |
-| panel-node | 9443 | 443 / 8443 | 2222 | 80 |
-| fi-parallel | 9443 | 24443 / 28443 | 2222 | 18080 loopback |
-
-Reality target — loopback 14123. Собственный Caddy admin API — loopback 12019.
-API панели/метрики/подписок — loopback 13000/13001/13010. Порты можно переопределить
-явно; совпадения и занятые порты являются ошибкой. FI сохраняет прежние
-80/443/8443/37241/4123/53042.
-
-`public_addresses` содержит полный ожидаемый набор A/AAAA. IPv6 нормализуется;
-лишний AAAA и неизвестный результат DNS блокируют запуск. `panel_addresses`
-нужен отдельной ноде для source allowlist управления. `management_address`
-позволяет задать приватный адрес API ноды; по умолчанию это домен ноды.
-`docker_subnet` — отдельный
-private IPv4 /24, по умолчанию 172.29.240.0/24; пересечение с действующими сетями
-не исправляется автоматической сменой адресов.
-
-`acme` — `production` или `staging`. Для FI задаются путь Caddyfile существующей
-системы, контейнер и HTTPS URL проверки старого сайта. Установщик сохраняет
-копию, проверяет полный конфиг и делает graceful reload. Изменение файла
-сохраняет inode Docker bind mount; при ошибке выполняется откат.
-
-Бюджет диска по умолчанию: образы 3 GiB + данные 1 GiB + восстановление 2 GiB +
-резерв 1 GiB. Если все закреплённые образы уже загружены, их бюджет повторно
-не вычитается из свободного места. Стандартная совместная установка требует
-1920 MiB свободной RAM сверх действующих служб. Профиль `resources.profile:
-"compact-test"` разрешён только для тестов: суммарные жёсткие лимиты контейнеров
-1152 MiB и ещё 128 MiB запаса, без роста swap новых контейнеров. Лимиты:
-панель 512, PostgreSQL 160, Valkey 32, подписки 192, Caddy 96, нода 160 MiB.
-Опциональная интервальная статистика добавляет 96 MiB: общий лимит 1248 MiB;
-в этом режиме heap панели уменьшается до 160 MiB при hard limit 512 MiB.
-Проверка ресурсов учитывает только уже работающие контейнеры данной установки;
-наличие подготовленного manifest не отменяет проверку свободной памяти.
-Параллельный FI с 2 GiB RAM прошёл свежий preflight и реальный запуск 09.10.2026.
-Production-ориентир —
-2 CPU, 4 GiB RAM и 20 GiB свободного диска. Чужие образы и архивы не очищаются.
-Этот ориентир относится к размещению панели. Отдельная нода проверяет минимум
-1 GiB RAM/1 CPU и явный дисковый бюджет config; требования панели на неё не
-переносятся. Основа: [официальные требования](https://docs.rw/install/requirements/).
-
-## Отдельная нода
-
-`--role node` подготавливает сервер, образы, конфиги и firewall без панели.
-Без штатного ключа она получает статус `node-prepared-awaiting-attachment`.
-
-После подготовки ноды в стандартном каталоге, на сервере панели:
-
-```bash
-bash /opt/pdm-remnawave/panel-test/rwctl node attach \
-  --ssh root@NODE_HOST --node-config /private/node.json
-```
-
-SSH host key должен уже находиться в known_hosts; используются BatchMode и
-StrictHostKeyChecking=yes. Сверяются параметры подготовленного хоста. Профиль
-ноды доставляется в панель через API; в ноду по SSH передаётся только пакет
-подключения, а не токен панели. Пакет ограничен часом и привязан к config fingerprint.
-Повтор сохраняет уже работающий ключ управления и зарегистрированные UUID.
-
-## Обслуживание и сохранность
-
-В каталоге установки сохраняется самодостаточный `rwctl`:
-
-```bash
-bash /opt/pdm-remnawave/fi-test/rwctl doctor
-bash /opt/pdm-remnawave/fi-test/rwctl preflight
-bash /opt/pdm-remnawave/fi-test/rwctl backup --archive /private-backups/fi-test.tgz
-bash rwctl restore --archive /private-backups/fi-test.tgz --output /opt/pdm-remnawave/fi-test
-bash /opt/pdm-remnawave/fi-test/rwctl upgrade --versions /private/versions.json
-bash /opt/pdm-remnawave/fi-test/rwctl rollback --archive /private-backups/pre-upgrade.tgz
-bash /opt/pdm-remnawave/fi-test/rwctl tls-test
-bash /opt/pdm-remnawave/fi-test/rwctl stats install --stats-port 13100 --dry-run
-bash /opt/pdm-remnawave/fi-test/rwctl stats install --stats-port 13100
-bash /opt/pdm-remnawave/fi-test/rwctl stats status
-bash /opt/pdm-remnawave/fi-test/rwctl tokens status
-bash /opt/pdm-remnawave/fi-test/rwctl tokens rotate --token all
-bash /opt/pdm-remnawave/fi-test/rwctl mfa status
-bash /opt/pdm-remnawave/fi-test/rwctl mfa guide
-```
-
-Stats addon сохраняет интервальные дельты и подтверждения существующего сборщика
-в собственной схеме PostgreSQL; дополнительных Xray-запросов нет. API только для
-чтения публикуется на loopback и требует отдельный токен. До установки история
-остаётся неизвестной. Подробности: [stats/README.md](../stats/README.md).
-
-Manifest формата 2 помечен `implementation: bash-docker`. Inventory и lock имеют
-версии форматов и environment_id. Секреты — отдельные файлы 0600 в каталоге 0700;
-логи не выводят токены/пароли. Повтор использует сохранённые секреты, а изменение
-config fingerprint/чужой объект API вызывает остановку. Операции блокируются flock.
-
-Токены подписок и установщика действуют 90 дней. `doctor`/`tokens status`
-показывают фактический срок и предупреждают за семь дней. `tokens rotate`
-проверяет права, выпускает замену, проверяет API и готовность сервиса, затем
-отзывает прежний токен. При отказе активации подписок прежний токен
-возвращается. Периодическое задание не создаётся.
-
-После обрыва повторите исходную команду с тем же config/output; для ротации
-повторите `tokens rotate` с тем же назначением. `.rw-write.json` сохраняет
-хеши и временный файл незавершённой записи; журнал токена хранит фиксированные
-имя, права и предыдущий UUID. Не удаляйте журналы или secret-файлы вручную.
-Потерянный ответ выпуска восстанавливается отзывом только собственного
-неопубликованного токена. Неизвестные изменения и неоднозначные совпадения
-останавливают процесс. Проверены SIGKILL и потеря API-ответов; это не
-гарантия сохранности при повреждении диска или потере всего каталога.
-
-Backup включает согласованный pg_dump, файлы установки и тома Caddy с MFA и
-сертификатами; архив проверяется и закрывается правами 0600. Перед переключением
-его требуется скопировать вне VPS вместе с `.sha256`. Restore предназначен
-для пустого каталога или продолжения того же восстановления. Он проверяет
-архив/manifest/digest, пересоздаёт доверенные Compose/Caddy, не запускает код
-из backup и сохраняет ключи, API-ID, MFA и сертификаты. Можно изменить IP;
-ID, роль, домены, порты и subnet сохраняются.
-
-Upgrade сначала загружает и проверяет официальные образы по digest, затем
-останавливает записи и создаёт согласованный снимок. Неудачная проверка
-возвращает прежние образы, всю БД и Caddy. Major PostgreSQL не меняется этой
-командой. Rollback также создаёт снимок текущего состояния перед заменой БД.
-Для смены версии панели со схемой `pdm_stats` требуется проверенная миграция.
-
-SSH защищается отдельными командами после установки:
-
-```bash
-bash /opt/pdm-remnawave/node-test/rwctl ssh prepare --admin-user vpnadmin --public-key /private/admin.pub
-bash rwctl ssh harden --config /private/node.json --output /opt/pdm-remnawave/node-test --ssh vpnadmin@NODE_HOST
-```
-
-Проверяются новый вход и `sudo -n`, конфигурация sshd и повторное подключение
-после reload. Watchdog возвращает прежнюю политику через 60 секунд без
-подтверждения. Обычный root-вход закрывается; ограниченные root-ключи
-quota-agent сохраняются через `PermitRootLogin forced-commands-only`.
-Удаление установки сохраняет созданного SSH-администратора и настройки входа.
-На рабочем FI SSH автоматически не менялся.
-
-TLS-test временно направляет только HTTP-01 проверки в отдельный Caddy,
-получает и перевыпускает staging-сертификат, затем возвращает исходный HTTP
-маршрут. Production-сертификат и MFA остаются в своём хранилище.
-
-## Удаление
-
-```bash
-bash uninstall.sh --output /opt/pdm-remnawave/fi-test --dry-run
-bash uninstall.sh --output /opt/pdm-remnawave/fi-test
-bash uninstall.sh --output /opt/pdm-remnawave/fi-test --purge
-```
-
-Без `--output` предлагается выбор manifest под `/opt/pdm-remnawave`. Для удаления
-подтверждается environment_id; `--yes` даёт явное подтверждение для автоматизации.
-По умолчанию Docker volumes сохраняются, а конфиги/ключи архивируются под
-`/var/backups/pdm-remnawave/` перед удалением. `--purge` удаляет также свои тома.
-`--prepared-only` разрешён только для незапущенного подготовленного комплекта.
-
-Удаляются только собственные контейнеры/сети/тома по Compose labels и дополнительной
-метке владения окружением/каталогом. Проверяются manifest и хеши; изменения после
-подтверждения считаются конфликтом. Собственные firewall/systemd/UFW-дополнения
-удаляются отдельно. Старый Caddy восстанавливается только при совпадении сохранённого
-хеша. Неуправляемые файлы и резервные копии в каталоге остаются. Docker Engine,
-образы, чужие службы, SSH и общий firewall не удаляются/не сбрасываются.
-Удаление API-объектов отдельной ноды на удалённой панели остаётся ручным шагом.
-
-## Проверки и сборка
+Build from this source tree on Linux:
 
 ```bash
 bash installer/build-entrypoints.sh
 bash installer/build-entrypoints.sh --check
-shellcheck -S warning rw-setup.sh uninstall.sh rwctl installer/build-entrypoints.sh
+shellcheck --severity=warning rw-setup.sh rwctl uninstall.sh installer/build-entrypoints.sh
+```
+
+The builder generates `rw-setup.sh`, `uninstall.sh` and `rwctl` deterministically.
+Deployment saves a self-contained `rwctl` beside each installation's config.
+There is no Python payload or Python installer dependency.
+
+## Safety model
+
+- The installation name and absolute output directory derive ownership labels.
+  Foreign containers, volumes, networks, routes, ports or changed managed files
+  block mutation. Operator files are not adopted into the deletion manifest.
+- Root-only private files hold credentials, API tokens and native node keys.
+  Secrets and API UUIDs persist across repeated setup. The wizard collects no
+  plaintext secrets in the public JSON.
+- A write journal reconciles interruption before/after atomic rename and manifest
+  updates. An unexpected external change blocks recovery rather than overwriting it.
+- API operations record intent and reconcile lost responses by owned identity.
+  Token rotation keeps the old token until candidate activation succeeds and
+  rejects foreign scopes, identities and duplicate matches.
+- Backups include managed files, PostgreSQL and Caddy data/config volumes. Restore
+  validates the archive and regenerates executable runtime code from the current
+  trusted CLI. Node/subscription upgrade rollback keeps current panel data;
+  coordinated upgrades and manual full rollback restore their database snapshot.
+- SSH hardening stages a key-based admin, requires a fresh login and keeps a
+  timed rollback until confirmation. Firewall rules are scoped and persistent.
+- A pinned panel hook is required for statistics. A changed panel digest cannot
+  proceed with the addon until compatibility has been checked.
+
+## Tests
+
+```bash
 bash tests/bash/unit.sh
 bash tests/bash/recovery-unit.sh
 bash tests/bash/stats-unit.sh
-bash tests/bash/interruption-unit.sh
 bash tests/bash/tokens-unit.sh
-sudo bash tests/bash/http-entrypoints.sh
-sudo bash tests/bash/live-compose.sh
+bash tests/bash/interruption-unit.sh
+bash tests/bash/wizard-unit.sh
+bash tests/bash/http-entrypoints.sh
+node tests/stats-hook.cjs
 ```
 
-Актуальная проверка 09.10.2026: 44 Bash-проверки; реальный wget/process-substitution
-из каталога без checkout; реальный стек в отдельном локальном Docker-проекте,
-администратор и scoped API-токены, профиль/нода/Hosts/squads, подключённый Xray,
-здоровая subscription-page, Caddy adapt/validate с MFA. Ранние 54 Python-теста
-относятся к удалённому прототипу и не являются тестами этой реализации.
+The first six suites contain 85 checks. HTTP tests additionally exercise wget
+and process substitution without a source checkout. `mfa-live.cjs` and
+`stats-live.py` are development test clients, not VPS installer requirements.
+Run live tests only against a disposable, explicitly selected installation.
 
-Исходники: `installer/bash/*.sh`, схема jq и Caddy-шаблон. Bash-сборщик объединяет
-их с public lock и trusted stats assets в три файла `rw-setup.sh`, `uninstall.sh`,
-`rwctl`. Комплект опубликован в каталоге `remnawave/` существующего репозитория.
-Реальные GitHub raw файлы совпали с проверенными Bash-исходниками; запуск
-через process substitution и scoped uninstall прошёл. На FI Debian 13 amd64 проверена параллельная
-установка с одним `fl.wf.md`, доверенным сертификатом, TCP/XHTTP с внешнего
-клиента, публичными подписками, закрытием внутренних портов, повтором с
-сохранением ключей/API UUID и backup. Старые контейнеры не перезапускались.
-Отчёт: [tests/verification.fi.json](../tests/verification.fi.json).
-На отдельном Debian 13 WSL прошли чистые panel/node/panel-node и полный CLI
-backup/purge/restore/upgrade/rollback. Проверен откат после добавления новой
-таблицы и реальное обновление PostgreSQL 18.3 → 18.4 на компонентном стенде.
-44 основных, 9 archive/upgrade, 7 stats, 7 interruption/wizard/MFA и 7 token
-safety Bash-проверок проходят — всего 74. Живые проверки ротации, обрыва
-bootstrap и MFA/restore описаны в [verification.installer-followup.json](../tests/verification.installer-followup.json).
-Отчёт обслуживания:
-[verification.maintenance.json](../tests/verification.maintenance.json).
-Наблюдение FI остановлено 09.10 по решению владельца: 85 выборок без ошибок,
-48 часов не завершены. Timer выключен; heartbeat в приложении отсутствует.
-MFA владельца на FI привязан и проверен. Чистый VPS с публичным DNS остаётся
-открытой приёмкой. На FI нет глобального IPv6; проверки выполнялись в стенде.
+The checked release combines Debian 13 native Docker role/maintenance tests
+with external FI verification. New component tests recreate the current pinned
+images and inject failure; they do not certify an untested upstream release.
+Clean provider VPS roles with public DNS/ACME and external global IPv6 remain
+outside the completed acceptance. Observation stopped by the owner remains
+incomplete. Migration/bot plans and private artifacts stay in the local migration
+project and are not published with this installer.

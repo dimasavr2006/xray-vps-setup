@@ -9,7 +9,7 @@ cleanup() {
     [[ $work == /tmp/pdm-rw-http.* ]] && rm -rf -- "$work"
 }
 trap cleanup EXIT
-image=$(jq -r '.components.node.image' "$ROOT/installer/versions.candidate.json")
+image=$(jq -r '.components.node.image' "$ROOT/installer/versions.lock.json")
 server=$(docker run -d --rm --label io.pdm.test=rw-http-20261008 --publish 127.0.0.1:39019:39019 \
     --mount "type=bind,src=$ROOT,dst=/source,readonly" --entrypoint node "$image" -e '
 const http=require("http"),fs=require("fs");

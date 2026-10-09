@@ -47,7 +47,8 @@ rw_write_begin "$RW_OUT/private/probe.txt"
 rm "$RW_OUT/private/probe.txt"
 rw_resume_writes; rw_verify_files
 passed 'interrupted managed deletion recovers'
-rw_interactive < <(printf '3\nci-wizard\nfi-parallel\nfi.example.com\n\nowner\nowner@example.com\n\n192.0.2.20\n/opt/old/Caddyfile\ncaddy\nhttps://fi.example.com\n\n')
+rw_choose_public_addresses() { printf '["192.0.2.20"]\n'; }
+rw_interactive < <(printf '3\nci-wizard\n2\nfi.example.com\n\nowner\nowner@example.com\n\n/opt/old/Caddyfile\ncaddy\nhttps://fi.example.com\n\n')
 RW_OUT=$TEST_ROOT/wizard; rw_config_load "$RW_CONFIG"
 jq -e '.domains.panel==.domains.subscription and .domains.node==.domains.panel and .resources.profile=="compact-test" and .existing_caddy.container=="caddy" and .ports.subscription_https==9444' "$RW_CFG" >/dev/null
 passed 'interactive parallel install collects full config and defaults to one domain'

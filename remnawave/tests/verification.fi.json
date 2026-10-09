@@ -120,7 +120,11 @@
     "stats_offhost_backup_checksum": "pass",
     "owner_mfa_enrollment": "pass: owner confirmed fresh login; active TOTP verified 2026-10-09",
     "owner_mfa_offhost_backup_checksum": "pass",
-    "tokens_status_and_mfa_doctor": "pass: promoted follow-up rwctl without container restart"
+    "tokens_status_and_mfa_doctor": "pass: promoted follow-up rwctl without container restart",
+    "english_cli_and_confluence_cover": "pass: promoted 2026-10-09 08:22 UTC; trusted cover HTTPS and unchanged secrets",
+    "all_container_start_times_preserved": true,
+    "public_ip_detection_matches_dns": "pass: detected and DNS 144.31.212.24; no global IPv6 required",
+    "english_release_offhost_backup_checksum": "pass: fi-test-english-20261009T082218Z.tgz"
   },
   "resources": {
     "disk_free_bytes": 5132484608,
@@ -192,8 +196,7 @@
     "external IPv6 on a host with global IPv6 (FI has no global IPv6; network namespace tests passed)"
   ],
   "github_published": true,
-  "github_commit": "8df96cfb53cbe85c86ce2e12ed1760bd2213d124",
-  "published_raw_process_substitution_and_uninstall": "pass: current release files byte-match canonical LF source",
+  "published_raw_process_substitution_and_uninstall": "Previous release passed; updated release raw verification follows publication.",
   "observation_heartbeat_id": "remnawave-fi",
   "observation": {
     "started_at_utc": "2026-10-08T23:26:05Z",
@@ -217,5 +220,7 @@
     "loopback_port": 13100,
     "reader_memory_limit_mib": 96,
     "panel_heap_mib": 160
-  }
+  },
+  "prior_github_commit": "8df96cfb53cbe85c86ce2e12ed1760bd2213d124",
+  "current_release": "English wizard, IP confirmation, Confluence default and component maintenance"
 }

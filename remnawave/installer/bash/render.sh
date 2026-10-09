@@ -1,15 +1,15 @@
 # shellcheck shell=bash
 rw_secrets() {
     local file=$RW_OUT/private/secrets.json key
-    if [[ -f $file ]]; then jq -e '.app_secret and .admin_password and .reality_private' "$file" >/dev/null || rw_die 'Файл секретов повреждён; новые ключи не создаются.'; return; fi
+    if [[ -f $file ]]; then jq -e '.app_secret and .admin_password and .reality_private' "$file" >/dev/null || rw_die 'The secrets file is damaged; keys will not be regenerated.'; return; fi
     if [[ -f $RW_OUT/manifest.json ]]; then
-        [[ $(jq -r '.secrets_ready // false' "$RW_OUT/manifest.json") == false ]] || rw_die 'Секреты потеряны; остановка без генерации новых ключей.'
+        [[ $(jq -r '.secrets_ready // false' "$RW_OUT/manifest.json") == false ]] || rw_die 'Secrets are missing; stopped without regenerating keys.'
     fi
     for key in app_secret postgres_password metrics_password webhook_secret auth_password; do openssl rand -hex 32 > "$RW_TMP/$key"; done
     printf 'Aa1%s\n' "$(openssl rand -hex 32)" > "$RW_TMP/admin_password"
     openssl genpkey -algorithm X25519 -outform DER -out "$RW_TMP/key.der"
     openssl pkey -inform DER -in "$RW_TMP/key.der" -pubout -outform DER -out "$RW_TMP/pub.der"
-    [[ $(wc -c < "$RW_TMP/key.der") == 48 && $(wc -c < "$RW_TMP/pub.der") == 44 ]] || rw_die 'Некорректный формат X25519 DER.'
+    [[ $(wc -c < "$RW_TMP/key.der") == 48 && $(wc -c < "$RW_TMP/pub.der") == 44 ]] || rw_die 'Invalid X25519 DER format.'
     tail -c 32 "$RW_TMP/key.der" | openssl base64 -A | tr '+/' '-_' | tr -d '=' > "$RW_TMP/reality_private"
     tail -c 32 "$RW_TMP/pub.der" | openssl base64 -A | tr '+/' '-_' | tr -d '=' > "$RW_TMP/reality_public"
     openssl rand -hex 8 > "$RW_TMP/short_id"; printf '/%s\n' "$(openssl rand -hex 16)" > "$RW_TMP/xhttp_path"
@@ -114,7 +114,7 @@ rw_render() {
         jq --arg env "$RW_ENV" '.environment_id=$env' "$RW_VERSION_FILE" | rw_atomic "$RW_OUT/versions.lock.json"
     else rw_versions | jq --arg env "$RW_ENV" '.environment_id=$env' | rw_atomic "$RW_OUT/versions.lock.json"; fi
     rw_secrets; rw_render_compose; rw_render_env; rw_render_profile; rw_render_caddy
-    printf '<!doctype html><html><title>Service</title><h1>Service online</h1></html>\n' | rw_atomic "$RW_OUT/site/index.html"
+    rw_site_default
     rw_install_ctl
     jq -n --slurpfile c "$RW_CFG" --arg owner "$RW_OWNER" '{schema_version:1,environment_id:$c[0].environment_id,role:$c[0].role,domains:$c[0].domains,ports:$c[0].ports,ownership_label:$owner,nodes:[],access_groups:[],secret_files:["private/secrets.json","private/node.env"],grants_existing_users_access:false}' | rw_atomic "$RW_OUT/inventory.json"
 }

@@ -7,7 +7,7 @@ rw_resource_checks() {
     minram=1536; mincpu=1
     if [[ $RW_ROLE == node ]]; then minram=1024
     elif [[ $(rw_cfg '.resources.purpose') == production ]]; then minram=4096; mincpu=2; fi
-    (( total >= minram && cpus >= mincpu )) || rw_die 'Недостаточно RAM/CPU для выбранного назначения.'
+    (( total >= minram && cpus >= mincpu )) || rw_die 'Insufficient RAM or CPU for the selected purpose.'
     limits=$(rw_memory_limits | jq --arg role "$RW_ROLE" 'if $role=="node" then {rw_caddy,rw_node}
       elif $role=="panel" then del(.rw_node) else . end')
     if rw_stats_enabled; then limits=$(jq '.rw_stats=96' <<< "$limits"); fi
@@ -29,7 +29,7 @@ rw_resource_checks() {
     # Compact tests reserve host headroom as well as every container's hard limit.
     if [[ $(rw_cfg '.resources.profile') == compact-test ]]; then required=$((required+128));
     elif [[ $RW_ROLE == node ]]; then required=$((required+128)); fi
-    (( available >= required )) || rw_die "Для новых контейнеров требуется $required MiB свободной RAM сверх действующих служб."
+    (( available >= required )) || rw_die "New containers require $required MiB of available RAM in addition to existing services."
     while [[ ! -d $path ]]; do path=$(dirname -- "$path"); done
     free=$(df -PB1 "$path" | awk 'NR==2 {print $4}')
     required=$(jq -r '(.resources|.image_gib+.data_gib+.restore_gib+.reserve_gib) * 1073741824 | ceil' "$RW_CFG")
@@ -43,21 +43,21 @@ rw_resource_checks() {
     fi
     if (( cached )); then required=$(jq -r '(.resources|.data_gib+.restore_gib+.reserve_gib)*1073741824|ceil' "$RW_CFG"); fi
     if [[ $RW_ROLE != node && $(rw_cfg '.resources.purpose') == production ]]; then (( required >= 21474836480 )) || required=21474836480; fi
-    (( free >= required )) || rw_die 'Недостаточно места для образов, данных, восстановления и резерва; чужие данные не очищаются.'
+    (( free >= required )) || rw_die 'Insufficient disk space for images, data, recovery and reserve; unrelated data will not be removed.'
 }
 rw_dns_checks() {
     local domain family
     while IFS= read -r domain; do
         : > "$RW_TMP/dns.txt"
         for family in A AAAA; do
-            dig +time=3 +tries=1 +noall +answer +comments "$domain" "$family" > "$RW_TMP/dig-answer.txt" || rw_die "DNS недоступен: $domain"
-            grep -q 'status: NOERROR' "$RW_TMP/dig-answer.txt" || rw_die "Ответ DNS для $domain/$family не подтверждён."
+            dig +time=3 +tries=1 +noall +answer +comments "$domain" "$family" > "$RW_TMP/dig-answer.txt" || rw_die "DNS lookup failed: $domain"
+            grep -q 'status: NOERROR' "$RW_TMP/dig-answer.txt" || rw_die "DNS response for $domain/$family could not be verified."
             awk '$4=="A" || $4=="AAAA" {print $5}' "$RW_TMP/dig-answer.txt" >> "$RW_TMP/dns.txt"
         done
         # CNAMEs are excluded, but every A/AAAA address must match the declared set.
         { rw_config_filter | sed '/^\.$/,$d'; printf '\n[inputs|select(ip)|ipnorm]|unique\n'; } > "$RW_TMP/dns.jq"
         jq -Rn -f "$RW_TMP/dns.jq" < "$RW_TMP/dns.txt" > "$RW_TMP/dns.json"
-        jq -e --slurpfile actual "$RW_TMP/dns.json" '.public_addresses == $actual[0]' "$RW_CFG" >/dev/null || rw_die "A/AAAA домена $domain не совпадают с public_addresses."
+        jq -e --slurpfile actual "$RW_TMP/dns.json" '.public_addresses == $actual[0]' "$RW_CFG" >/dev/null || rw_die "A/AAAA records for $domain do not match public_addresses."
     done < <(jq -r '.domains[]' "$RW_CFG")
 }
 rw_docker_ownership() {
@@ -67,7 +67,7 @@ rw_docker_ownership() {
         owner=$(docker inspect --format '{{index .Config.Labels "io.pdm.remnawave.installation"}}' "$id")
         project=$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project"}}' "$id")
         configs=$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project.config_files"}}' "$id")
-        [[ $owner == "$RW_OWNER" && $project == "$RW_PROJECT" && $configs == "$RW_OUT/compose.json" ]] || rw_die 'Одноимённый Compose-проект принадлежит другой установке.'
+        [[ $owner == "$RW_OWNER" && $project == "$RW_PROJECT" && $configs == "$RW_OUT/compose.json" ]] || rw_die 'A Compose project with this name belongs to another installation.'
     done < <(docker ps -aq --filter "label=com.docker.compose.project=$RW_PROJECT")
 }
 rw_port_checks() {
@@ -79,7 +79,7 @@ rw_port_checks() {
         while IFS= read -r row; do
             [[ -n $row ]] || continue
             socket_pids=$(grep -oE 'pid=[0-9]+' <<< "$row" | cut -d= -f2 || true)
-            [[ -n $socket_pids ]] || rw_die "Неизвестный владелец TCP $port ($name)."
+            [[ -n $socket_pids ]] || rw_die "Unknown owner of TCP port $port ($name)."
             for pids in $socket_pids; do
                 if ! grep -qx "$pids" "$RW_TMP/owned-pids"; then
                     publication=0
@@ -88,7 +88,7 @@ rw_port_checks() {
                             docker inspect --format '{{json .NetworkSettings.Ports}}' "$id" | jq -e --arg port "$port" 'to_entries | any(.[]|.value[]?; .HostIp=="127.0.0.1" and .HostPort==$port)' >/dev/null && publication=1
                         done
                     fi
-                    (( publication )) || rw_die "TCP $port ($name) занят другим сервисом."
+                    (( publication )) || rw_die "TCP port $port ($name) is used by another service."
                 fi
             done
         done < <(ss -H -lntp | awk -v p="$port" '$4 ~ (":" p "$") {print}')
@@ -98,7 +98,7 @@ rw_port_checks() {
         [[ -n $id ]] || continue
         [[ $(docker inspect --format '{{index .Config.Labels "io.pdm.remnawave.installation"}}' "$id") == "$RW_OWNER" ]] && continue
         docker inspect --format '{{json .NetworkSettings.Ports}}' "$id" > "$RW_TMP/docker-ports.json"
-        jq -e --slurpfile c "$RW_CFG" '[to_entries[]|select(.key|endswith("/tcp"))|.value[]?.HostPort|tonumber] as $used | ($c[0].ports|[.[]]) as $wanted | all($used[]; . as $port | ($wanted|index($port))==null)' "$RW_TMP/docker-ports.json" >/dev/null || rw_die 'Порт нового окружения уже опубликован другим Docker-контейнером.'
+        jq -e --slurpfile c "$RW_CFG" '[to_entries[]|select(.key|endswith("/tcp"))|.value[]?.HostPort|tonumber] as $used | ($c[0].ports|[.[]]) as $wanted | all($used[]; . as $port | ($wanted|index($port))==null)' "$RW_TMP/docker-ports.json" >/dev/null || rw_die 'An installation port is already published by another Docker container.'
     done < <(docker ps -q)
 }
 rw_network_check() {
@@ -119,14 +119,14 @@ rw_network_check() {
     jq -Rn --arg subnet "$RW_SUBNET" '
       def number: split(".")|map(tonumber)|reduce .[] as $n (0;.*256+$n);
       def bounds: split("/") as $p | ($p[0]|number) as $n | pow(2;32-($p[1]|tonumber)) as $size | [($n/$size|floor)*$size,(($n/$size|floor)+1)*$size-1];
-      ($subnet|bounds) as $wanted | [inputs|select(test("^[0-9.]+/[0-9]+$"))|bounds] | all(.[]; .[1]<$wanted[0] or .[0]>$wanted[1])' < "$RW_TMP/networks" | grep -qx true || rw_die 'docker_subnet пересекается с действующей сетью; задайте другой subnet явно.'
+      ($subnet|bounds) as $wanted | [inputs|select(test("^[0-9.]+/[0-9]+$"))|bounds] | all(.[]; .[1]<$wanted[0] or .[0]>$wanted[1])' < "$RW_TMP/networks" | grep -qx true || rw_die 'docker_subnet overlaps an existing network; specify another subnet.'
 }
 rw_preflight() {
     rw_os; rw_resource_checks; rw_dns_checks
-    /usr/sbin/sshd -t || rw_die 'sshd -t не прошёл; SSH не изменялся.'
-    [[ $(timedatectl show -p NTPSynchronized --value) == yes ]] || rw_die 'Не подтверждена синхронизация времени.'
-    nft -j list ruleset >/dev/null || rw_die 'Невозможно прочитать текущий firewall.'
+    /usr/sbin/sshd -t || rw_die 'sshd -t failed; SSH was not changed.'
+    [[ $(timedatectl show -p NTPSynchronized --value) == yes ]] || rw_die 'Time synchronization could not be verified.'
+    nft -j list ruleset >/dev/null || rw_die 'Cannot read the current firewall rules.'
     rw_docker_ownership; rw_port_checks; rw_network_check
     if [[ $RW_MODE == fi-parallel ]]; then rw_existing_caddy_check; fi
-    rw_info 'Preflight пройден: ОС, DNS A/AAAA, RAM/диск, порты, Docker и сети.'
+    rw_info 'Preflight passed: OS, DNS A/AAAA, RAM/disk, ports, Docker and networks.'
 }

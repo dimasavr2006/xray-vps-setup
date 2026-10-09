@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Log in to Confluence</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background-color: #f4f5f7;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+        }
+
+        .login-container {
+            background-color: white;
+            padding: 40px;
+            border-radius: 8px;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12), 0 1px 2px rgba(0, 0, 0, 0.24);
+            width: 350px;
+            text-align: center;
+        }
+
+        .logo {
+            margin-bottom: 20px;
+        }
+
+        .logo img {
+            width: 120px;
+        }
+
+        h2 {
+            margin-bottom: 20px;
+            font-size: 24px;
+            color: #0052cc;
+        }
+
+        input[type="text"], input[type="password"] {
+            width: 100%;
+            padding: 10px;
+            margin: 10px 0;
+            border: 1px solid #dfe1e6;
+            border-radius: 4px;
+            box-sizing: border-box;
+            font-size: 16px;
+        }
+
+        .error {
+            border-color: red;
+        }
+
+        .error-message {
+            color: red;
+            font-size: 14px;
+            display: none;
+            margin-top: 10px;
+        }
+
+        button {
+            width: 100%;
+            padding: 10px;
+            background-color: #0052cc;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            margin-top: 20px;
+        }
+
+        button:hover {
+            background-color: #0747a6;
+        }
+
+        .help-links {
+            margin-top: 20px;
+            font-size: 14px;
+        }
+
+        .help-links a {
+            color: #0052cc;
+            text-decoration: none;
+        }
+
+        .help-links a:hover {
+            text-decoration: underline;
+        }
+         /* Modal dialog styles */
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            overflow: auto;
+            background-color: rgba(0,0,0,0.4);
+            padding-top: 60px;
+        }
+
+        .modal-content {
+            background-color: white;
+            margin: 5% auto;
+            padding: 20px;
+            border: 1px solid #888;
+            width: 80%;
+            max-width: 400px;
+            border-radius: 8px;
+            text-align: center;
+        }
+
+        .close {
+            color: #aaa;
+            float: right;
+            font-size: 28px;
+            font-weight: bold;
+            cursor: pointer;
+        }
+
+        .close:hover,
+        .close:focus {
+            color: black;
+            text-decoration: none;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+
+<div class="login-container">
+    <div class="logo">
+        <svg width="120" height="120" fill="#0052cc" role="img" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><title>Confluence</title><path d="M.87 18.257c-.248.382-.53.875-.763 1.245a.764.764 0 0 0 .255 1.04l4.965 3.054a.764.764 0 0 0 1.058-.26c.199-.332.454-.763.733-1.221 1.967-3.247 3.945-2.853 7.508-1.146l4.957 2.337a.764.764 0 0 0 1.028-.382l2.364-5.346a.764.764 0 0 0-.382-1 599.851 599.851 0 0 1-4.965-2.361C10.911 10.97 5.224 11.185.87 18.257zM23.131 5.743c.249-.405.531-.875.764-1.25a.764.764 0 0 0-.256-1.034L18.675.404a.764.764 0 0 0-1.058.26c-.195.335-.451.763-.734 1.225-1.966 3.246-3.945 2.85-7.508 1.146L4.437.694a.764.764 0 0 0-1.027.382L1.046 6.422a.764.764 0 0 0 .382 1c1.039.49 3.105 1.467 4.965 2.361 6.698 3.246 12.392 3.029 16.738-4.04z"/></svg>
+    </div>
+    <h2 id="login-title">Log in to Confluence</h2>
+    <form id="login-form" action="#" autocomplete="off">
+        <input type="text" id="username" placeholder="Email address">
+        <input type="password" id="password" placeholder="Enter password">
+        <button type="submit" id="login-button">Log in</button>
+    </form>
+    <div id="error-message" class="error-message">Incorrect username or password.</div>
+    <div class="help-links">
+        <a href="#" id="forgot-link">Cannot log in?</a> • <a href="#" id="create-link">Create an account</a>
+    </div>
+</div>
+
+<div id="myModal" class="modal">
+    <div class="modal-content">
+        <span class="close">&times;</span>
+        <p id="modal-text">To create an account, contact your administrator.</p>
+    </div>
+</div>
+
+<script>
+    document.getElementById('create-link').dataset.modalText = 'To create an account, contact your administrator.';
+    document.getElementById('forgot-link').dataset.modalText = 'To recover access, contact your administrator.';
+
+    var modal = document.getElementById("myModal");
+
+    var span = document.getElementsByClassName("close")[0];
+
+    function openModal(text) {
+        document.getElementById('modal-text').innerText = text;
+        modal.style.display = "block";
+    }
+
+    document.getElementById("create-link").onclick = function(event) {
+        event.preventDefault();
+        openModal(this.dataset.modalText);
+    }
+
+    document.getElementById("forgot-link").onclick = function(event) {
+        event.preventDefault();
+        openModal(this.dataset.modalText);
+    }
+
+    span.onclick = function() {
+        modal.style.display = "none";
+    }
+
+    window.onclick = function(event) {
+        if (event.target == modal) {
+            modal.style.display = "none";
+        }
+    }
+
+    document.getElementById('login-form').onsubmit = function(event) {
+        event.preventDefault();
+        var username = document.getElementById('username');
+        var password = document.getElementById('password');
+        var errorMessage = document.getElementById('error-message');
+
+        username.classList.remove('error');
+        password.classList.remove('error');
+        errorMessage.style.display = 'none';
+
+        var hasError = false;
+        if (username.value.trim() === '') {
+            username.classList.add('error');
+            hasError = true;
+        }
+        if (password.value.trim() === '') {
+            password.classList.add('error');
+            hasError = true;
+        }
+
+        if (hasError) {
+            return;
+        }
+
+        errorMessage.style.display = 'block';
+    };
+
+    window.onclick = function(event) {
+        if (event.target == modal) {
+            modal.style.display = "none";
+        }
+    }
+</script>
+
+</body>
+</html>

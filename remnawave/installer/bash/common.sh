@@ -1,21 +1,21 @@
 # shellcheck shell=bash
-rw_die() { printf 'Ошибка: %s\n' "$*" >&2; exit 1; }
+rw_die() { printf 'Error: %s\n' "$*" >&2; exit 1; }
 rw_info() { printf '%s\n' "$*" >&2; }
-rw_linux() { [[ $(uname -s) == Linux ]] || rw_die 'Установщик предназначен только для Linux.'; }
-rw_root() { (( EUID == 0 )) || rw_die 'Для установки/удаления запустите скрипт от root.'; }
-rw_need() { command -v "$1" >/dev/null 2>&1 || rw_die "Нужна команда $1."; }
+rw_linux() { [[ $(uname -s) == Linux ]] || rw_die 'This installer supports Linux only.'; }
+rw_root() { (( EUID == 0 )) || rw_die 'Run installation and removal as root.'; }
+rw_need() { command -v "$1" >/dev/null 2>&1 || rw_die "Required command: $1."; }
 rw_safe_parents() {
     local parent
     parent=$(dirname -- "$1")
     while [[ $parent != / && $parent != . ]]; do
-        [[ ! -L $parent ]] || rw_die 'Символьная ссылка в родительском каталоге.'
+        [[ ! -L $parent ]] || rw_die 'A parent directory is a symbolic link.'
         parent=$(dirname -- "$parent")
     done
 }
 rw_atomic() {
     local target=$1 temp
     rw_safe_parents "$target"
-    [[ ! -L $target ]] || rw_die 'Символьная ссылка вместо управляемого файла.'
+    [[ ! -L $target ]] || rw_die 'A managed file is a symbolic link.'
     mkdir -p -- "$(dirname -- "$target")"
     temp=$(mktemp "${target}.tmp.XXXXXX")
     cat > "$temp"; chmod 600 "$temp"
@@ -26,13 +26,13 @@ rw_atomic() {
 }
 rw_plain_atomic() {
     local target=$1 temp
-    [[ ! -L $target ]] || rw_die 'Символьная ссылка вместо журнала.'
+    [[ ! -L $target ]] || rw_die 'The journal is a symbolic link.'
     temp=$(mktemp "${target}.tmp.XXXXXX")
     cat > "$temp"; chmod 600 "$temp"; mv -f -- "$temp" "$target"
 }
 rw_write_begin() {
     local target=$1 temp=${2:-} previous='' next=''
-    [[ ! -f $RW_OUT/.rw-write.json ]] || rw_die 'Незавершённая запись: сначала восстановите журнал.'
+    [[ ! -f $RW_OUT/.rw-write.json ]] || rw_die 'An unfinished write exists; recover the journal first.'
     [[ ! -f $target ]] || previous=$(sha256sum "$target" | cut -d' ' -f1)
     [[ -z $temp ]] || next=$(sha256sum "$temp" | cut -d' ' -f1)
     jq -n --arg owner "$RW_OWNER" --arg path "${target#"$RW_OUT/"}" --arg temp "${temp#"$RW_OUT/"}" --arg previous "$previous" --arg next "$next" \
@@ -41,19 +41,19 @@ rw_write_begin() {
 rw_resume_writes() {
     [[ -f $RW_OUT/.rw-write.json ]] || return 0
     local path temp previous next current='' target
-    [[ ! -L $RW_OUT/.rw-write.json && $(stat -c %a "$RW_OUT/.rw-write.json") == 600 ]] || rw_die 'Некорректные права журнала записи.'
-    jq -e --arg owner "$RW_OWNER" '.schema_version==1 and .owner==$owner and (.path|type=="string" and test("^[A-Za-z0-9_./-]+$") and startswith("/")==false and contains("..")==false) and (.path!="manifest.json" and .path!=".rw-write.json") and ([.previous,.next]|all(.=="" or test("^[a-f0-9]{64}$")))' "$RW_OUT/.rw-write.json" >/dev/null || rw_die 'Журнал записи не принадлежит установке.'
+    [[ ! -L $RW_OUT/.rw-write.json && $(stat -c %a "$RW_OUT/.rw-write.json") == 600 ]] || rw_die 'The write journal must be a regular file with mode 0600.'
+    jq -e --arg owner "$RW_OWNER" '.schema_version==1 and .owner==$owner and (.path|type=="string" and test("^[A-Za-z0-9_./-]+$") and startswith("/")==false and contains("..")==false) and (.path!="manifest.json" and .path!=".rw-write.json") and ([.previous,.next]|all(.=="" or test("^[a-f0-9]{64}$")))' "$RW_OUT/.rw-write.json" >/dev/null || rw_die 'The write journal does not belong to this installation.'
     path=$(jq -r '.path' "$RW_OUT/.rw-write.json"); temp=$(jq -r '.temp' "$RW_OUT/.rw-write.json")
     previous=$(jq -r '.previous' "$RW_OUT/.rw-write.json"); next=$(jq -r '.next' "$RW_OUT/.rw-write.json")
     target=$RW_OUT/$path; rw_safe_parents "$target"
-    [[ ! -L $target && ( ! -e $target || -f $target ) ]] || rw_die 'Необычный тип файла в незавершённой записи.'
+    [[ ! -L $target && ( ! -e $target || -f $target ) ]] || rw_die 'Unexpected file type in an unfinished write.'
     [[ ! -f $target ]] || current=$(sha256sum "$target" | cut -d' ' -f1)
-    [[ $current == "$previous" || $current == "$next" ]] || rw_die 'Файл изменён вне установщика во время незавершённой записи.'
+    [[ $current == "$previous" || $current == "$next" ]] || rw_die 'The file was changed externally during an unfinished write.'
     if [[ -n $next ]]; then
-        [[ $temp == "$path.tmp."* && $temp != *'..'* && $temp != /* ]] || rw_die 'Некорректный временный путь журнала.'
+        [[ $temp == "$path.tmp."* && $temp != *'..'* && $temp != /* ]] || rw_die 'Invalid temporary path in the write journal.'
         rw_safe_parents "$RW_OUT/$temp"
         if [[ $current != "$next" ]]; then
-            [[ -f $RW_OUT/$temp && ! -L $RW_OUT/$temp && $(sha256sum "$RW_OUT/$temp" | cut -d' ' -f1) == "$next" ]] || rw_die 'Не сохранилось содержимое незавершённой записи.'
+            [[ -f $RW_OUT/$temp && ! -L $RW_OUT/$temp && $(sha256sum "$RW_OUT/$temp" | cut -d' ' -f1) == "$next" ]] || rw_die 'The unfinished write payload is missing or changed.'
             mv -f -- "$RW_OUT/$temp" "$target"
         fi
         jq --arg path "$path" --arg sum "$next" '.managed_files=([.managed_files[]|select(.path!=$path)]+[{path:$path,sha256:$sum}])' "$RW_OUT/manifest.json" | rw_plain_atomic "$RW_OUT/manifest.json"
@@ -72,7 +72,7 @@ rw_lock() {
     mkdir -p -- "$RW_OUT/private"
     chmod 700 "$RW_OUT" "$RW_OUT/private"
     exec 9>"$RW_OUT/.rw.lock"
-    flock -n 9 || rw_die 'Другая операция с этой установкой уже выполняется.'
+    flock -n 9 || rw_die 'Another operation is running for this installation.'
     RW_LOCK_DIR=$RW_OUT
 }
 rw_cleanup() {
@@ -99,7 +99,7 @@ rw_deps() {
     for cmd in curl jq openssl dig ss nft flock; do command -v "$cmd" >/dev/null 2>&1 || missing=1; done
     if (( missing )); then
         rw_root
-        rw_info 'Установка зависимостей: curl jq openssl dnsutils iproute2 nftables util-linux ca-certificates.'
+        rw_info 'Installing dependencies: curl jq openssl dnsutils iproute2 nftables util-linux ca-certificates.'
         apt-get update -q
         DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends curl jq openssl dnsutils iproute2 nftables util-linux ca-certificates
     fi
@@ -107,11 +107,11 @@ rw_deps() {
 rw_os() {
     # shellcheck disable=SC1091
     source /etc/os-release
-    [[ $ID == debian && $VERSION_ID == 13 && $(uname -m) == x86_64 ]] || rw_die 'Первый поддерживаемый VPS: Debian 13 amd64.'
+    [[ $ID == debian && $VERSION_ID == 13 && $(uname -m) == x86_64 ]] || rw_die 'Supported server: Debian 13 amd64.'
 }
 rw_docker_install() {
     if ! command -v docker >/dev/null 2>&1; then
-        rw_info 'Установка Docker Engine и Compose из официального APT-репозитория Docker.'
+        rw_info 'Installing Docker Engine and Compose from the official Docker APT repository.'
         apt-get install -y --no-install-recommends ca-certificates curl
         install -m 0755 -d /etc/apt/keyrings
         curl -fsS --proto '=https' --tlsv1.2 https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc
@@ -121,22 +121,22 @@ rw_docker_install() {
         DEBIAN_FRONTEND=noninteractive apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
         systemctl enable --now docker.service
     fi
-    docker info >/dev/null 2>&1 || rw_die 'Docker недоступен; существующий daemon не переустанавливается.'
+    docker info >/dev/null 2>&1 || rw_die 'Docker is unavailable; the existing daemon will not be reinstalled.'
     local version major minor
     version=$(docker compose version --short); version=${version#v}; IFS=. read -r major minor _ <<< "$version"
-    (( major > 2 || (major == 2 && minor >= 30) )) || rw_die 'Нужен Docker Compose 2.30+.'
+    (( major > 2 || (major == 2 && minor >= 30) )) || rw_die 'Docker Compose 2.30 or newer is required.'
 }
 rw_config_load() {
     local file=$1
     rw_config_filter > "$RW_TMP/config.jq"
-    jq -ef "$RW_TMP/config.jq" "$file" > "$RW_TMP/config.json" 2>"$RW_TMP/config-error" || rw_die 'Некорректный config JSON. Проверьте поля и примеры в installer/examples.'
+    jq -ef "$RW_TMP/config.jq" "$file" > "$RW_TMP/config.json" 2>"$RW_TMP/config-error" || rw_die 'Invalid configuration JSON. Check the fields and installer/examples.'
     RW_CFG=$RW_TMP/config.json
     RW_ENV=$(jq -r '.environment_id' "$RW_CFG"); RW_ROLE=$(jq -r '.role' "$RW_CFG"); RW_MODE=$(jq -r '.network_mode' "$RW_CFG")
     RW_OUT=$(realpath -m -- "${RW_OUT:-/opt/pdm-remnawave/$RW_ENV}")
-    [[ $RW_OUT =~ ^/[A-Za-z0-9_./-]+$ ]] || rw_die 'Каталог установки: абсолютный путь без пробелов и управляющих символов.'
-    [[ $RW_OUT != / && $RW_OUT != /opt && $RW_OUT != /etc && $RW_OUT != /tmp && $RW_OUT != /root && $RW_OUT != /home ]] || rw_die 'Укажите отдельный каталог установки.'
+    [[ $RW_OUT =~ ^/[A-Za-z0-9_./-]+$ ]] || rw_die 'Installation directory must be an absolute path without spaces or control characters.'
+    [[ $RW_OUT != / && $RW_OUT != /opt && $RW_OUT != /etc && $RW_OUT != /tmp && $RW_OUT != /root && $RW_OUT != /home ]] || rw_die 'Specify a dedicated installation directory.'
     local parent=$RW_OUT
-    while [[ $parent != / ]]; do [[ ! -L $parent ]] || rw_die 'Каталог установки содержит symlink.'; parent=$(dirname -- "$parent"); done
+    while [[ $parent != / ]]; do [[ ! -L $parent ]] || rw_die 'The installation directory contains a symbolic link.'; parent=$(dirname -- "$parent"); done
     RW_PROJECT=pdm-rw-$RW_ENV
     RW_OWNER=$(printf '%s' "$RW_ENV:$RW_OUT" | sha256sum | cut -d' ' -f1)
     RW_SUBNET=$(jq -r '.docker_subnet' "$RW_CFG"); RW_NET_PREFIX=${RW_SUBNET%.0/24}; RW_PANEL_ADDRESS=$RW_NET_PREFIX.1
@@ -161,13 +161,13 @@ rw_manifest() {
       '{schema_version:2,implementation:"bash-docker",environment_id:$e,role:$role,compose_project:$project,ownership_label:$owner,config_fingerprint:$fp,status:$status,api:{},managed_files:[]}' | rw_atomic "$RW_OUT/manifest.json"
 }
 rw_owned() {
-    [[ -f $RW_OUT/manifest.json && ! -L $RW_OUT/manifest.json ]] || rw_die 'Нет manifest собственной установки.'
+    [[ -f $RW_OUT/manifest.json && ! -L $RW_OUT/manifest.json ]] || rw_die 'The installation manifest is missing.'
     jq -e --arg owner "$RW_OWNER" --arg e "$RW_ENV" --arg p "$RW_PROJECT" \
-      '.schema_version==2 and .implementation=="bash-docker" and .environment_id==$e and .ownership_label==$owner and .compose_project==$p' "$RW_OUT/manifest.json" >/dev/null || rw_die 'Конфликт владения установкой.'
+      '.schema_version==2 and .implementation=="bash-docker" and .environment_id==$e and .ownership_label==$owner and .compose_project==$p' "$RW_OUT/manifest.json" >/dev/null || rw_die 'Installation ownership conflict.'
 }
 rw_install_ctl() {
     {
-        printf '%s\n' '#!/usr/bin/env bash' 'set +x' 'set -euo pipefail' 'umask 077'
+        printf '%s\n' '#!/usr/bin/env bash' 'set +x' 'set -euo pipefail' 'export LC_ALL=C' 'umask 077'
         local fn
         while IFS= read -r fn; do declare -f "$fn"; done < <(compgen -A function | LC_ALL=C sort | awk '/^rw_/')
         printf '%s\n' 'rw_main ctl "$@"'

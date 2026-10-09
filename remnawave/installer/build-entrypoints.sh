@@ -3,9 +3,9 @@ set -euo pipefail
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 build() {
     local command=$1
-    printf '%s\n' '#!/usr/bin/env bash' '# Generated from installer/bash by installer/build-entrypoints.sh.' 'set +x' 'set -euo pipefail' 'umask 077'
+    printf '%s\n' '#!/usr/bin/env bash' '# Generated from installer/bash by installer/build-entrypoints.sh.' 'set +x' 'set -euo pipefail' 'export LC_ALL=C' 'umask 077'
     printf '%s\n' 'rw_versions() {' "cat <<'RW_VERSIONS'"
-    cat "$ROOT/installer/versions.candidate.json"
+    cat "$ROOT/installer/versions.lock.json"
     printf '%s\n' 'RW_VERSIONS' '}' 'rw_auth_global() {' "cat <<'RW_AUTH_GLOBAL'"
     cat "$ROOT/installer/templates/auth-global.caddy"
     printf '%s\n' 'RW_AUTH_GLOBAL' '}' 'rw_config_filter() {' "cat <<'RW_CONFIG_JQ'"
@@ -18,7 +18,10 @@ build() {
         cat "$ROOT/stats/$file"
         printf '\nRW_STATS_PAYLOAD\n}\n'
     done
-    for file in common render preflight deploy tokens maintenance recovery upgrade stats ssh tls mfa cli; do cat "$ROOT/installer/bash/$file.sh"; done
+    printf '%s\n' 'rw_confluence() {' "cat <<'RW_CONFLUENCE'"
+    cat "$ROOT/installer/templates/confluence.html"
+    printf '\nRW_CONFLUENCE\n}\n'
+    for file in common addresses site render preflight deploy tokens maintenance recovery upgrade stats ssh tls mfa cli; do cat "$ROOT/installer/bash/$file.sh"; done
     printf '\nrw_main %s "$@"\n' "$command"
 }
 for spec in 'rw-setup.sh:setup' 'uninstall.sh:uninstall' 'rwctl:ctl'; do
