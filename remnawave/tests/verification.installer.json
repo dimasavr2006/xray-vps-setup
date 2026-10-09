@@ -35,7 +35,9 @@
     "failed_node_upgrade_retains_post_backup_database_write": "pass",
     "actual_wget_process_substitution_and_owned_uninstall": "pass",
     "fi_english_ctl_confluence_and_real_ip_dns": "pass: real TLS, unchanged secrets, all container start times preserved",
-    "fi_offhost_backup_checksum": "pass"
+    "fi_offhost_backup_checksum": "pass",
+    "published_raw_files_and_process_substitution": "pass: exact current source bytes; standalone wget preview and scoped prepared uninstall",
+    "fi_external_trusted_cover_https": "pass"
   },
   "images": {
     "panel": "3.4.5",
@@ -105,7 +107,10 @@
     "ci_modern_installation_purged": true,
     "ci_modern_containers_removed": true,
     "unrelated_runtime_untouched": true,
-    "local_plans_and_reports_retained": true
+    "local_plans_and_reports_retained": true,
+    "synthetic_ci_modern_backups_removed": true,
+    "owned_wsl_distro_stopped": true,
+    "base_debian_and_image_cache_retained": true
   },
   "limits": [
     "Current pinned images were recreated; this does not certify a newer upstream release.",
@@ -113,5 +118,6 @@
     "External global IPv6 acceptance remains open.",
     "Full passive 48-hour observation was stopped by owner; no recurring checks or update watchers were started.",
     "Statistics compatibility must be verified before changing a panel digest."
-  ]
+  ],
+  "github_code_commit": "6c5578e633e05b3c994178dcd1d9b4cbc9d6f0cf"
 }
