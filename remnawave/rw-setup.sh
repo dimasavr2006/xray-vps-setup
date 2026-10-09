@@ -1005,7 +1005,8 @@ rw_resource_checks() {
     available=$(awk '/MemAvailable:/ {print int($2/1024)}' /proc/meminfo)
     cpus=$(getconf _NPROCESSORS_ONLN)
     minram=1536; mincpu=1
-    if [[ $(rw_cfg '.resources.purpose') == production ]]; then minram=4096; mincpu=2; fi
+    if [[ $RW_ROLE == node ]]; then minram=1024
+    elif [[ $(rw_cfg '.resources.purpose') == production ]]; then minram=4096; mincpu=2; fi
     (( total >= minram && cpus >= mincpu )) || rw_die 'Недостаточно RAM/CPU для выбранного назначения.'
     limits=$(rw_memory_limits | jq --arg role "$RW_ROLE" 'if $role=="node" then {rw_caddy,rw_node}
       elif $role=="panel" then del(.rw_node) else . end')
@@ -1041,7 +1042,7 @@ rw_resource_checks() {
         done < <(rw_versions | jq -r --arg role "$RW_ROLE" '.components|to_entries[]|select(if $role=="node" then .key=="node" or .key=="caddy_auth" elif $role=="panel" then .key!="node" else true end)|.value.image')
     fi
     if (( cached )); then required=$(jq -r '(.resources|.data_gib+.restore_gib+.reserve_gib)*1073741824|ceil' "$RW_CFG"); fi
-    if [[ $(rw_cfg '.resources.purpose') == production ]]; then (( required >= 21474836480 )) || required=21474836480; fi
+    if [[ $RW_ROLE != node && $(rw_cfg '.resources.purpose') == production ]]; then (( required >= 21474836480 )) || required=21474836480; fi
     (( free >= required )) || rw_die 'Недостаточно места для образов, данных, восстановления и резерва; чужие данные не очищаются.'
 }
 rw_dns_checks() {

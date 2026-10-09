@@ -105,6 +105,19 @@ docker() {
 rw_resource_checks
 unset -f awk docker df
 passed 'running owned containers are credited against their existing RAM reservation'
+(
+    RW_TMP=$TEST_ROOT/production-node-tmp; mkdir "$RW_TMP"
+    jq '.resources.purpose="production"' "$ROOT/installer/examples/node.json" > "$TEST_ROOT/production-node.json"
+    RW_OUT=$TEST_ROOT/production-node; rw_config_load "$TEST_ROOT/production-node.json"
+    awk() {
+        case "$*" in *MemTotal*|*MemAvailable*) printf '1024\n';; *) command awk "$@";; esac
+    }
+    getconf() { printf '1\n'; }
+    df() { printf 'Filesystem 1B-blocks Used Available Use%% Mounted\nfixture 10000000000 2000000000 8000000000 20%% /\n'; }
+    docker() { [[ $1 == image && $2 == inspect ]]; }
+    rw_resource_checks
+)
+passed 'standalone production node uses node requirements, not combined panel RAM/disk minimum'
 df() { printf 'Filesystem 1B-blocks Used Available Use%% Mounted\nfixture 1000 999 1 99%% /\n'; }
 fail_expected rw_resource_checks; unset -f df; passed 'low disk budget blocks before container launch'
 ss() { printf 'LISTEN 0 128 [::]:9443 [::]:* users:(("foreign",pid=999999,fd=1))\n'; }

@@ -116,6 +116,9 @@ private IPv4 /24, по умолчанию 172.29.240.0/24; пересечени�
 Параллельный FI с 2 GiB RAM прошёл свежий preflight и реальный запуск 09.10.2026.
 Production-ориентир —
 2 CPU, 4 GiB RAM и 20 GiB свободного диска. Чужие образы и архивы не очищаются.
+Этот ориентир относится к размещению панели. Отдельная нода проверяет минимум
+1 GiB RAM/1 CPU и явный дисковый бюджет config; требования панели на неё не
+переносятся. Основа: [официальные требования](https://docs.rw/install/requirements/).
 
 ## Отдельная нода
 
@@ -228,7 +231,7 @@ sudo bash tests/bash/http-entrypoints.sh
 sudo bash tests/bash/live-compose.sh
 ```
 
-Актуальная проверка 09.10.2026: 43 Bash-проверки; реальный wget/process-substitution
+Актуальная проверка 09.10.2026: 44 Bash-проверки; реальный wget/process-substitution
 из каталога без checkout; реальный стек в отдельном локальном Docker-проекте,
 администратор и scoped API-токены, профиль/нода/Hosts/squads, подключённый Xray,
 здоровая subscription-page, Caddy adapt/validate с MFA. Ранние 54 Python-теста
@@ -246,7 +249,7 @@ sudo bash tests/bash/live-compose.sh
 На отдельном Debian 13 WSL прошли чистые panel/node/panel-node и полный CLI
 backup/purge/restore/upgrade/rollback. Проверен откат после добавления новой
 таблицы и реальное обновление PostgreSQL 18.3 → 18.4 на компонентном стенде.
-43 основных, 9 archive/upgrade и 7 stats Bash-проверок проходят. Отчёт обслуживания:
+44 основных, 9 archive/upgrade и 7 stats Bash-проверок проходят. Отчёт обслуживания:
 [verification.maintenance.json](../tests/verification.maintenance.json).
 FI наблюдается каждые пять минут до **11.10.2026 02:26 МСК**. Привязка MFA
 владельцем и чистый VPS с публичным DNS остаются открытыми. На FI нет глобального
