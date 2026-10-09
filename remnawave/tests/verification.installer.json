@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "date": "2026-10-09",
-  "scope": "English installer, confirmed IP discovery, Confluence cover, component updates and installation access card",
+  "scope": "English installer, confirmed IP discovery, Confluence cover, component updates and installation access card; default UFW and conditional root public key",
   "runtime": "Linux/Bash/Docker; no Python installer runtime",
   "bash_checks": {
     "main": 44,
@@ -10,8 +10,9 @@
     "interruption_wizard_mfa": 7,
     "tokens": 7,
     "wizard_cover_components": 11,
-    "total": 93,
-    "installation_summary": 8
+    "total": 103,
+    "installation_summary": 8,
+    "host_security": 10
   },
   "checks": {
     "english_runtime_and_templates": "pass",
@@ -37,13 +38,20 @@
     "actual_wget_process_substitution_and_owned_uninstall": "pass",
     "fi_english_ctl_confluence_and_real_ip_dns": "pass: real TLS, unchanged secrets, all container start times preserved",
     "fi_offhost_backup_checksum": "pass",
-    "published_raw_files_and_process_substitution": "pass: current summary release bytes match canonical source; actual wget preview and scoped uninstall passed",
+    "published_raw_files_and_process_substitution": "Prior access-card release passed; host-security release raw verification follows publication.",
     "fi_external_trusted_cover_https": "pass",
     "installation_summary_three_roles_shared_ports_and_ipv6": "pass",
     "passwords_shown_in_real_terminal_and_hidden_in_redirected_output": "pass: setup summary and explicit info --show-secrets; redirected --show-secrets rejected",
     "private_access_card_mode_0600_and_managed_integrity": "pass: login passwords included; DB/API/native-management/private-Reality values excluded",
     "fi_saved_rwctl_info_and_access_card": "pass: real addresses/ports, no secret output, unchanged secrets and all container start times",
-    "fi_summary_backup_offhost": "pass: fi-test-summary-20261009T085500Z.tgz"
+    "fi_summary_backup_offhost": "pass: fi-test-summary-20261009T085500Z.tgz",
+    "root_key_absence_append_and_existing_key_preservation": "pass: valid key only, original lines retained, mode 0600, no private key input",
+    "ufw_inventory_and_active_policy": "pass: preserved TCP/UDP/Docker ports, localhost and owned node API excluded, active deny restrictions retained",
+    "security_readonly_preview_and_legacy_fingerprint": "pass",
+    "native_ufw_tcp_udp_ipv6_and_fresh_ssh": "pass: real network namespaces and SSH, unapproved new listeners blocked",
+    "native_ufw_unconfirmed_activation_rollback": "pass: actual systemd watchdog; CI interval shortened to 20 seconds, production interval 300 seconds",
+    "fi_ufw_enabled_confirmed_and_preserved_ports": "pass: all 15 TCP probe results unchanged; old/new trusted HTTPS; root authorized_keys and all container start times unchanged",
+    "fi_ufw_offhost_backup_checksum": "pass: fi-test-ufw-20261009T113416Z.tgz"
   },
   "images": {
     "panel": "3.4.5",
@@ -115,7 +123,7 @@
     "unrelated_runtime_untouched": true,
     "local_plans_and_reports_retained": true,
     "synthetic_ci_modern_backups_removed": true,
-    "owned_wsl_distro_stopped": true,
+    "owned_wsl_distro_stopped": false,
     "base_debian_and_image_cache_retained": true
   },
   "limits": [
@@ -124,6 +132,5 @@
     "External global IPv6 acceptance remains open.",
     "Full passive 48-hour observation was stopped by owner; no recurring checks or update watchers were started.",
     "Statistics compatibility must be verified before changing a panel digest."
-  ],
-  "github_code_commit": "77b0622843cfe8d49fb244aa12fc09fb3821bb83"
+  ]
 }

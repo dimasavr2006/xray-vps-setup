@@ -50,6 +50,12 @@ rw_summary_render() {
         fi
     fi
     printf '\nConfiguration: %s/config.json\nInventory: %s/inventory.json\n' "$RW_OUT" "$RW_OUT"
+    if jq -e '.security!=null' "$RW_OUT/manifest.json" >/dev/null; then
+        printf 'Root SSH key: %s\nUFW: %s\n' "$(jq -r '.security.root_key // "unchanged"' "$RW_OUT/manifest.json")" "$(jq -r '.security.ufw // "unchanged"' "$RW_OUT/manifest.json")"
+        if [[ $(jq -r '.security.ufw // empty' "$RW_OUT/manifest.json") == awaiting-fresh-ssh ]]; then
+            printf 'Reconnect SSH in a new terminal and confirm within 5 minutes:\n  bash %q security confirm\n' "$RW_OUT/rwctl"
+        fi
+    fi
     if [[ -f $RW_OUT/private/install-info.txt ]]; then printf 'Full access card (root-only): %s/private/install-info.txt\n' "$RW_OUT"; fi
     printf 'Show this summary: bash %q info\n' "$RW_OUT/rwctl"
     if (( ! prepared )); then printf 'Health check: bash %q doctor\n' "$RW_OUT/rwctl"; fi

@@ -7,7 +7,9 @@ same guide is `../README.md`.
 `bash/` contains the Bash implementation. `config.jq` validates and normalizes
 the public configuration. `addresses.sh` detects and confirms IPs/DNS;
 `site.sh` manages the Confluence/custom cover. `summary.sh` renders the
-terminal/private access card and read-only `info`. `templates/` and
+terminal/private access card and read-only `info`. `security.sh` installs UFW,
+preserves root keys and host services, and guards policy changes until a fresh
+SSH connection is confirmed. `templates/` and
 `versions.lock.json` are embedded into the generated entrypoints.
 `../stats/` contains the optional interval-accounting addon.
 
@@ -21,7 +23,8 @@ shellcheck --severity=warning rw-setup.sh rwctl uninstall.sh installer/build-ent
 
 The builder generates `rw-setup.sh`, `uninstall.sh` and `rwctl` deterministically.
 Deployment saves a self-contained `rwctl` beside each installation's config.
-There is no Python payload or Python installer dependency.
+There is no Python installer payload. Debian UFW installs its own Python
+runtime dependencies through APT.
 
 ## Safety model
 
@@ -55,11 +58,12 @@ bash tests/bash/tokens-unit.sh
 bash tests/bash/interruption-unit.sh
 bash tests/bash/wizard-unit.sh
 bash tests/bash/summary-unit.sh
+bash tests/bash/security-unit.sh
 bash tests/bash/http-entrypoints.sh
 node tests/stats-hook.cjs
 ```
 
-The first seven suites contain 93 checks. HTTP tests additionally exercise wget
+The first eight suites contain 103 checks. HTTP tests additionally exercise wget
 and process substitution without a source checkout. `mfa-live.cjs` and
 `stats-live.py` are development test clients, not VPS installer requirements.
 Run live tests only against a disposable, explicitly selected installation.

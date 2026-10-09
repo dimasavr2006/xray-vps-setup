@@ -87,11 +87,11 @@ rw_restore_files() {
     rw_lock; RW_MUTATING=1
     if [[ ! -f $RW_OUT/manifest.json ]]; then
         jq --arg owner "$RW_OWNER" --arg fp "$RW_FINGERPRINT" --arg sha "$RW_BACKUP_SHA" \
-          '.api_namespace_owner //= .ownership_label | .ownership_label=$owner | .config_fingerprint=$fp | .status="restoring" | .restore_archive_sha256=$sha | .firewall_installed=false | .ufw_rules_added=false | .existing_caddy_updated=false | .managed_files=[] | del(.ssh)' "$source/manifest.json" | rw_atomic "$RW_OUT/manifest.json"
+          '.api_namespace_owner //= .ownership_label | .ownership_label=$owner | .config_fingerprint=$fp | .status="restoring" | .restore_archive_sha256=$sha | .firewall_installed=false | .ufw_rules_added=false | .existing_caddy_updated=false | .managed_files=[] | del(.ssh,.security)' "$source/manifest.json" | rw_atomic "$RW_OUT/manifest.json"
     fi
     rw_resume_writes
     while IFS= read -r path; do
-        [[ $path != rwctl && $path != compose.json && $path != config.json && $path != private/.managed-paths && $path != private/ssh-* && $path != plugins/stats/* && $path != private/stats.env && $path != private/stats.token ]] || continue
+        [[ $path != rwctl && $path != compose.json && $path != config.json && $path != private/.managed-paths && $path != private/ssh-* && $path != private/security-* && $path != private/ufw-before/* && $path != plugins/stats/* && $path != private/stats.env && $path != private/stats.token ]] || continue
         cat "$source/$path" | rw_atomic "$RW_OUT/$path"
     done < <(jq -r '.managed_files[].path' "$source/manifest.json")
     # Never execute archived shell code or trust an archived Compose with host mounts.

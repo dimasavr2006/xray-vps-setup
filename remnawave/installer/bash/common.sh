@@ -79,6 +79,7 @@ rw_cleanup() {
     if [[ ${RW_TLS_PROXY_PENDING:-0} == 1 ]]; then rw_tls_restore_proxy || true; fi
     if [[ -n ${RW_TLS_CONTAINER:-} ]]; then rw_tls_cleanup || true; fi
     if [[ ${RW_UPGRADE_PENDING:-0} == 1 ]]; then rw_upgrade_abort || true; fi
+    if [[ ${RW_UFW_MUTATING:-0} == 1 ]]; then rw_security_revert || true; fi
     if [[ ${RW_CADDY_ROLLBACK_PENDING:-0} == 1 ]]; then
         cat "$RW_OUT/private/existing-caddy.before" > "$RW_EXISTING_CADDY_FILE" || true
         docker exec "$RW_EXISTING_CADDY_CONTAINER" caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null 2>&1 || true
@@ -90,18 +91,19 @@ rw_cleanup() {
 rw_init_tmp() {
     RW_MUTATING=0
     RW_UPGRADE_PENDING=0
+    RW_UFW_MUTATING=0
     RW_TMP=$(mktemp -d /tmp/pdm-rw.XXXXXX)
     trap rw_cleanup EXIT
     trap 'exit 130' INT; trap 'exit 143' TERM
 }
 rw_deps() {
     local missing=0 cmd
-    for cmd in curl jq openssl dig ss nft flock; do command -v "$cmd" >/dev/null 2>&1 || missing=1; done
+    for cmd in curl jq openssl dig ss nft flock ssh-keygen; do command -v "$cmd" >/dev/null 2>&1 || missing=1; done
     if (( missing )); then
         rw_root
         rw_info 'Installing dependencies: curl jq openssl dnsutils iproute2 nftables util-linux ca-certificates.'
         apt-get update -q
-        DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends curl jq openssl dnsutils iproute2 nftables util-linux ca-certificates
+        DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends curl jq openssl dnsutils iproute2 nftables util-linux ca-certificates openssh-client
     fi
 }
 rw_os() {

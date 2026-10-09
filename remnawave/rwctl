@@ -214,7 +214,10 @@ def port: type == "number" and . == floor and . >= 1 and . <= 65535;
 def require($ok; $message): if $ok then . else error($message) end;
 .
 | require(type == "object"; "config must be a JSON object")
-| require((keys - ["schema_version","environment_id","role","network_mode","domains","public_addresses","panel_addresses","management_address","ports","admin","resources","docker_subnet","acme","node_country","existing_caddy"]) == []; "unknown config field")
+| require((keys - ["schema_version","environment_id","role","network_mode","domains","public_addresses","panel_addresses","management_address","ports","admin","resources","docker_subnet","acme","node_country","existing_caddy","security"]) == []; "unknown config field")
+| require(.security==null or (.security|type=="object" and (keys-["enabled","root_public_key"]==[])); "unknown security field")
+| require(.security.enabled==null or (.security.enabled|type=="boolean"); "security.enabled must be boolean")
+| require(.security.root_public_key==null or (.security.root_public_key|type=="string" and length<=8192 and test("^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp256) [A-Za-z0-9+/=]+( [^\\r\\n]*)?$")); "root_public_key must be a public SSH key line")
 | require(.schema_version == 1; "expected config schema_version 1")
 | require(.environment_id | type == "string" and test("^[a-z][a-z0-9-]{2,19}$"); "environment_id: 3..20 letters/digits/hyphens")
 | require(.role == "panel" or .role == "node" or .role == "panel-node"; "invalid role")
@@ -1054,6 +1057,7 @@ rw_cleanup() {
     if [[ ${RW_TLS_PROXY_PENDING:-0} == 1 ]]; then rw_tls_restore_proxy || true; fi
     if [[ -n ${RW_TLS_CONTAINER:-} ]]; then rw_tls_cleanup || true; fi
     if [[ ${RW_UPGRADE_PENDING:-0} == 1 ]]; then rw_upgrade_abort || true; fi
+    if [[ ${RW_UFW_MUTATING:-0} == 1 ]]; then rw_security_revert || true; fi
     if [[ ${RW_CADDY_ROLLBACK_PENDING:-0} == 1 ]]; then
         cat "$RW_OUT/private/existing-caddy.before" > "$RW_EXISTING_CADDY_FILE" || true
         docker exec "$RW_EXISTING_CADDY_CONTAINER" caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null 2>&1 || true
@@ -1065,18 +1069,19 @@ rw_cleanup() {
 rw_init_tmp() {
     RW_MUTATING=0
     RW_UPGRADE_PENDING=0
+    RW_UFW_MUTATING=0
     RW_TMP=$(mktemp -d /tmp/pdm-rw.XXXXXX)
     trap rw_cleanup EXIT
     trap 'exit 130' INT; trap 'exit 143' TERM
 }
 rw_deps() {
     local missing=0 cmd
-    for cmd in curl jq openssl dig ss nft flock; do command -v "$cmd" >/dev/null 2>&1 || missing=1; done
+    for cmd in curl jq openssl dig ss nft flock ssh-keygen; do command -v "$cmd" >/dev/null 2>&1 || missing=1; done
     if (( missing )); then
         rw_root
         rw_info 'Installing dependencies: curl jq openssl dnsutils iproute2 nftables util-linux ca-certificates.'
         apt-get update -q
-        DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends curl jq openssl dnsutils iproute2 nftables util-linux ca-certificates
+        DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends curl jq openssl dnsutils iproute2 nftables util-linux ca-certificates openssh-client
     fi
 }
 rw_os() {
@@ -1320,6 +1325,12 @@ rw_summary_render() {
         fi
     fi
     printf '\nConfiguration: %s/config.json\nInventory: %s/inventory.json\n' "$RW_OUT" "$RW_OUT"
+    if jq -e '.security!=null' "$RW_OUT/manifest.json" >/dev/null; then
+        printf 'Root SSH key: %s\nUFW: %s\n' "$(jq -r '.security.root_key // "unchanged"' "$RW_OUT/manifest.json")" "$(jq -r '.security.ufw // "unchanged"' "$RW_OUT/manifest.json")"
+        if [[ $(jq -r '.security.ufw // empty' "$RW_OUT/manifest.json") == awaiting-fresh-ssh ]]; then
+            printf 'Reconnect SSH in a new terminal and confirm within 5 minutes:\n  bash %q security confirm\n' "$RW_OUT/rwctl"
+        fi
+    fi
     if [[ -f $RW_OUT/private/install-info.txt ]]; then printf 'Full access card (root-only): %s/private/install-info.txt\n' "$RW_OUT"; fi
     printf 'Show this summary: bash %q info\n' "$RW_OUT/rwctl"
     if (( ! prepared )); then printf 'Health check: bash %q doctor\n' "$RW_OUT/rwctl"; fi
@@ -1339,6 +1350,244 @@ rw_show_summary() {
         [[ -t 1 ]] || rw_die '--show-secrets requires an interactive terminal.'
     fi
     rw_summary_render "${RW_SHOW_SECRETS:-0}"
+}
+# shellcheck shell=bash
+rw_root_key_paths() {
+    local home path client=${SSH_CONNECTION:-127.0.0.1}
+    client=${client%% *}
+    home=$(getent passwd root | cut -d: -f6)
+    [[ $home == /* && $home != / ]] || rw_die 'Cannot determine the root home directory.'
+    while IFS= read -r path; do
+        [[ $path != none ]] || continue
+        path=${path//%h/$home}; path=${path//%u/root}; path=${path//%U/0}; path=${path//%%/%}
+        [[ $path == /* ]] || path=$home/$path
+        printf '%s\n' "$path"
+    done < <(/usr/sbin/sshd -T -C user=root,host=localhost,addr="$client" 2>/dev/null | awk '$1=="authorizedkeysfile" {for(i=2;i<=NF;i++)print $i}')
+}
+rw_root_key_present() {
+    local file
+    while IFS= read -r file; do
+        if [[ -f $file ]] && ssh-keygen -lf "$file" >/dev/null 2>&1; then return 0; fi
+    done < <(rw_root_key_paths)
+    return 1
+}
+rw_public_key_check() {
+    local key=$1 type data rest
+    [[ $key != *$'\n'* && $key != *$'\r'* && ${#key} -le 8192 ]] || return 1
+    read -r type data rest <<< "$key"
+    [[ $type == ssh-ed25519 || $type == ssh-rsa || $type == ecdsa-sha2-nistp256 ]] || return 1
+    [[ $data =~ ^[A-Za-z0-9+/=]+$ ]] || return 1
+    printf '%s %s\n' "$type" "$data" > "$RW_TMP/root-public-key"
+    ssh-keygen -lf "$RW_TMP/root-public-key" >/dev/null 2>&1
+}
+rw_security_key_input() {
+    if rw_root_key_present; then rw_info 'Root already has an SSH key; authorized_keys will be preserved.'; return; fi
+    read -r -p 'Root public SSH key (one ssh-ed25519/ssh-rsa/ecdsa line): ' RW_ROOT_PUBLIC_KEY || rw_die 'Public key input was interrupted.'
+    rw_public_key_check "$RW_ROOT_PUBLIC_KEY" || rw_die 'Provide a valid public SSH key, not a private key.'
+}
+rw_security_key_prepare() {
+    local key file type data rest
+    if rw_root_key_present; then rw_manifest_set '.security.root_key="existing-preserved"'; return; fi
+    key=$(rw_cfg '.security.root_public_key // empty')
+    [[ -n $key ]] && rw_public_key_check "$key" || rw_die 'Root has no valid file-based SSH key. Supply security.root_public_key in the config.'
+    file=$(rw_root_key_paths | head -n1)
+    [[ -n $file ]] || rw_die 'Root AuthorizedKeysFile is disabled; the current SSH policy was preserved.'
+    rw_safe_parents "$file"
+    [[ ! -L $file && ( ! -e $file || -f $file ) ]] || rw_die 'Unsafe root authorized_keys file.'
+    [[ ! -f $file || $(stat -c %u "$file") == 0 ]] || rw_die 'Root authorized_keys has an unexpected owner.'
+    if [[ ! -d $(dirname -- "$file") ]]; then install -d -m 700 -o root -g root "$(dirname -- "$file")"; fi
+    touch "$file"; chmod 600 "$file"; chown root:root "$file"
+    read -r type data rest <<< "$key"
+    # Append only when no existing valid key was found; keep comments and other lines.
+    printf '\n%s %s pdm-root-access\n' "$type" "$data" >> "$file"
+    rw_manifest_set '.security.root_key="added"'
+    rw_info 'Root public key added. Existing SSH authentication policy was preserved.'
+}
+rw_security_ports() {
+    local id node_port
+    node_port=$(rw_port node_api)
+    ss -H -lntu > "$RW_TMP/host-listeners.txt"
+    awk -v node="$node_port" '{
+      endpoint=$5; sub(/^\[/,"",endpoint); sub(/\]:/,":",endpoint);
+      port=endpoint; sub(/^.*:/,"",port); addr=endpoint; sub(/:[^:]*$/,"",addr);
+      if (port !~ /^[0-9]+$/ || addr ~ /^127\./ || addr=="::1" || addr=="0:0:0:0:0:0:0:1") next;
+      if ($1=="tcp" && port==node) next;
+      if ($1=="tcp" || $1=="udp") print $1 " " port;
+    }' "$RW_TMP/host-listeners.txt" > "$RW_TMP/preserved-ports.txt"
+    if command -v docker >/dev/null 2>&1; then
+        while IFS= read -r id; do
+            [[ -n $id ]] || continue
+            docker inspect "$id" | jq -r '.[0].NetworkSettings.Ports // {} | to_entries[] | .key as $key | .value[]? | select(((.HostIp // "")|startswith("127.")|not) and .HostIp!="::1") | ($key|split("/")[1])+" "+.HostPort' >> "$RW_TMP/preserved-ports.txt"
+        done < <(docker ps -q)
+    fi
+    awk '$1~/^(tcp|udp)$/ && $2~/^[0-9]+$/ && $2>0 && $2<=65535' "$RW_TMP/preserved-ports.txt" | LC_ALL=C sort -u | jq -Rn '[inputs|split(" ")|{proto:.[0],port:(.[1]|tonumber)}]'
+}
+rw_security_capture() {
+    [[ $(rw_cfg '.security.enabled != false') == true ]] || return 0
+    /usr/sbin/sshd -t || rw_die 'SSH configuration is invalid; host security was not changed.'
+    rw_security_key_prepare
+    # Capture before starting new services; never preserve loopback APIs as public.
+    rw_security_ports | rw_atomic "$RW_OUT/private/security-preserved-ports.json"
+}
+rw_ufw_files() {
+    printf '%s\n' /etc/default/ufw /etc/ufw/ufw.conf /etc/ufw/before.rules /etc/ufw/before6.rules /etc/ufw/after.rules /etc/ufw/after6.rules /etc/ufw/user.rules /etc/ufw/user6.rules
+}
+rw_ufw_hash() { local file; while IFS= read -r file; do sha256sum "$file" || return 1; done < <(rw_ufw_files) | sha256sum | cut -d' ' -f1; }
+rw_ufw_snapshot() {
+    local file
+    while IFS= read -r file; do
+        rw_safe_parents "$file"
+        [[ -f $file && ! -L $file ]] || rw_die 'Unexpected UFW configuration file type.'
+        cat "$file" | rw_atomic "$RW_OUT/private/ufw-before$file"
+    done < <(rw_ufw_files)
+}
+rw_ufw_input_policy() {
+    if [[ -f /etc/default/ufw ]]; then awk -F= '$1=="DEFAULT_INPUT_POLICY" {gsub(/"/,"",$2); print $2}' /etc/default/ufw
+    else printf 'ACCEPT\n'; fi
+}
+rw_security_plan() {
+    local active=false input=ACCEPT ssh_port connection=${SSH_CONNECTION:-} preserved=${1:-$RW_OUT/private/security-preserved-ports.json}
+    if command -v ufw >/dev/null 2>&1 && ufw status | grep -q '^Status: active'; then active=true; fi
+    input=$(rw_ufw_input_policy)
+    /usr/sbin/sshd -T > "$RW_TMP/security-sshd.txt"
+    awk '$1=="port" {print $2}' "$RW_TMP/security-sshd.txt" > "$RW_TMP/security-ssh-ports.txt"
+    ssh_port=${connection##* }
+    if [[ $ssh_port =~ ^[0-9]+$ ]]; then printf '%s\n' "$ssh_port" >> "$RW_TMP/security-ssh-ports.txt"; fi
+    jq -Rn '[inputs|tonumber]|unique' < "$RW_TMP/security-ssh-ports.txt" > "$RW_TMP/security-ssh-ports.json"
+    jq -n --argjson active "$active" --arg input "$input" --arg client "${connection%% *}" \
+      --slurpfile config "$RW_CFG" --slurpfile preserved "$preserved" --slurpfile ssh "$RW_TMP/security-ssh-ports.json" '
+      $config[0].ports as $p |
+      ([$p.http,$p.https,$p.subscription_https,$p.reality,$p.xhttp]|map(select(.!=null and .!=18080))|unique|map({proto:"tcp",port:.})) as $tcp |
+      ([$p.https,$p.subscription_https]|map(select(.!=null))|unique|map({proto:"udp",port:.})) as $udp |
+      {active_before:$active,input_before:$input,ssh_ports:$ssh[0],ssh_source:(if $active and $input=="DROP" then $client else "" end),
+       preserved_ports:(if $active and $input=="DROP" then [] else $preserved[0] end),
+       public_ports:($tcp+$udp)}' > "$RW_TMP/security-plan.json"
+}
+rw_security_apply() {
+    [[ $(rw_cfg '.security.enabled != false') == true ]] || return 0
+    rw_root; rw_owned; rw_lock; rw_security_idle
+    rw_safe_parents /var/lib/pdm-remnawave-security/ufw.lock
+    [[ ! -L /var/lib/pdm-remnawave-security/ufw.lock ]] || rw_die 'Host firewall lock is a symbolic link.'
+    install -d -m 700 /var/lib/pdm-remnawave-security
+    exec 18>/var/lib/pdm-remnawave-security/ufw.lock
+    flock -n 18 || rw_die 'Another installation is configuring the host firewall.'
+    if [[ -f /var/lib/pdm-remnawave-security/ufw-owner.json ]] && jq -e '.status=="armed"' /var/lib/pdm-remnawave-security/ufw-owner.json >/dev/null; then
+        rw_die 'A host firewall change is already awaiting a fresh SSH connection.'
+    fi
+    if ! command -v ufw >/dev/null 2>&1; then
+        apt-get update -q
+        DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ufw
+    fi
+    [[ -f $RW_OUT/private/security-preserved-ports.json ]] || rw_security_capture
+    rw_security_plan
+    local active input port proto source guard=true
+    active=$(jq -r '.active_before' "$RW_TMP/security-plan.json"); input=$(jq -r '.input_before' "$RW_TMP/security-plan.json")
+    # With an active deny policy, only additive rules are needed; preserve its restrictions.
+    [[ $active != true || $input != DROP ]] || guard=false
+    if [[ $guard == true ]]; then
+        rw_ufw_snapshot
+        jq -n --arg connection "${SSH_CONNECTION:-}" --argjson active "$active" '{status:"armed",active_before:$active,ssh_connection:$connection}' | rw_atomic "$RW_OUT/private/security-state.json"
+        jq -n --arg owner "$RW_OWNER" --arg dir "$RW_OUT" '{owner:$owner,installation_path:$dir,status:"armed"}' | rw_atomic /var/lib/pdm-remnawave-security/ufw-owner.json
+        rw_track_files
+        systemctl stop "$RW_PROJECT-ufw-revert.timer" "$RW_PROJECT-ufw-revert.service" >/dev/null 2>&1 || true
+        systemctl reset-failed "$RW_PROJECT-ufw-revert.timer" "$RW_PROJECT-ufw-revert.service" >/dev/null 2>&1 || true
+        rw_security_schedule || { rw_security_revert; rw_die 'UFW rollback timer could not be started; policy was not changed.'; }
+        RW_UFW_MUTATING=1
+    fi
+    source=$(jq -r '.ssh_source' "$RW_TMP/security-plan.json")
+    while IFS= read -r port; do
+        if [[ -n $source ]]; then ufw allow from "$source" to any port "$port" proto tcp comment pdm-host-ssh >/dev/null
+        elif [[ $active != true || $input != DROP ]]; then ufw allow "$port/tcp" comment pdm-host-ssh >/dev/null; fi
+    done < <(jq -r '.ssh_ports[]' "$RW_TMP/security-plan.json")
+    while IFS=$'\t' read -r proto port; do ufw allow "$port/$proto" comment pdm-host-preserved >/dev/null; done < <(jq -r '.preserved_ports[]|[.proto,.port]|@tsv' "$RW_TMP/security-plan.json")
+    while IFS=$'\t' read -r proto port; do ufw allow "$port/$proto" comment "$RW_PROJECT" >/dev/null; done < <(jq -r '.public_ports[]|[.proto,.port]|@tsv' "$RW_TMP/security-plan.json")
+    port=$(rw_port node_api)
+    if [[ -n $port ]]; then
+        if [[ $RW_ROLE == node ]]; then jq -r '.panel_addresses[]' "$RW_CFG" > "$RW_TMP/security-node-sources"
+        else printf '%s\n' "$RW_NET_PREFIX.10" > "$RW_TMP/security-node-sources"; fi
+        while IFS= read -r source; do ufw allow from "$source" to any port "$port" proto tcp comment "$RW_PROJECT" >/dev/null; done < "$RW_TMP/security-node-sources"
+    fi
+    if [[ $guard == true ]]; then
+        ufw default deny incoming >/dev/null
+        if [[ $active == false ]]; then ufw default allow outgoing >/dev/null; fi
+        sed 's/^IPV6=.*/IPV6=yes/' /etc/default/ufw > "$RW_TMP/ufw-default"
+        cat "$RW_TMP/ufw-default" > /etc/default/ufw
+        ufw --force enable >/dev/null || { rw_security_revert; rw_die 'UFW activation failed; previous settings restored.'; }
+        rw_manifest_set '.security.ufw="awaiting-fresh-ssh"|.ufw_rules_added=true'
+        jq --arg hash "$(rw_ufw_hash)" '.applied_sha256=$hash' "$RW_OUT/private/security-state.json" | rw_atomic "$RW_OUT/private/security-state.json"
+        RW_UFW_MUTATING=0
+        rw_info 'UFW enabled. Reconnect SSH and run rwctl security confirm within 5 minutes; otherwise UFW settings roll back.'
+    else
+        rw_manifest_set '.security.ufw="active-existing-policy"|.ufw_rules_added=true'
+        rw_info 'Active UFW deny policy retained; installation ports added without resetting existing rules.'
+    fi
+    exec 18>&-
+}
+rw_security_idle() {
+    [[ ! -f $RW_OUT/private/security-state.json ]] || [[ $(jq -r '.status' "$RW_OUT/private/security-state.json") != armed ]] || rw_die 'Verify a fresh SSH connection with security confirm or wait for UFW rollback.'
+}
+rw_security_schedule() {
+    systemd-run --quiet --unit "$RW_PROJECT-ufw-revert" --on-active=300s --timer-property=AccuracySec=1s /bin/bash "$RW_OUT/rwctl" security revert
+}
+rw_security_confirm() {
+    rw_root; rw_owned; rw_lock; rw_verify_files
+    [[ -f $RW_OUT/private/security-state.json ]] && [[ $(jq -r '.status' "$RW_OUT/private/security-state.json") == armed ]] || rw_die 'No UFW change is awaiting confirmation.'
+    [[ -n ${SSH_CONNECTION:-} && $SSH_CONNECTION != "$(jq -r '.ssh_connection' "$RW_OUT/private/security-state.json")" ]] || rw_die 'Confirm from a fresh SSH session, not the installation session.'
+    ufw status | grep -q '^Status: active' || rw_die 'UFW is not active.'
+    [[ $(rw_ufw_hash) == "$(jq -r '.applied_sha256' "$RW_OUT/private/security-state.json")" ]] || rw_die 'UFW settings changed before confirmation; review the new rules.'
+    systemctl stop "$RW_PROJECT-ufw-revert.timer"
+    rw_manifest_set '.security.ufw="confirmed"'
+    jq '.status="confirmed"' "$RW_OUT/private/security-state.json" | rw_atomic "$RW_OUT/private/security-state.json"
+    rw_security_host_state confirmed
+    rw_track_files
+    rw_info 'Fresh SSH connection verified; UFW settings retained.'
+}
+rw_security_revert() {
+    rw_root; rw_owned; rw_lock
+    [[ -f $RW_OUT/private/security-state.json ]] && [[ $(jq -r '.status' "$RW_OUT/private/security-state.json") == armed ]] || return 0
+    local file active
+    active=$(jq -r '.active_before' "$RW_OUT/private/security-state.json")
+    local expected
+    expected=$(jq -r '.applied_sha256 // empty' "$RW_OUT/private/security-state.json")
+    [[ -z $expected || $(rw_ufw_hash) == "$expected" || ${RW_UFW_MUTATING:-0} == 1 ]] || rw_die 'UFW changed externally; rollback will not overwrite the new configuration.'
+    # Restore only UFW configuration; Docker/nftables tables and SSH keys stay intact.
+    while IFS= read -r file; do
+        rw_safe_parents "$file"
+        [[ -f $file && ! -L $file ]] || rw_die 'UFW configuration file type changed; rollback stopped.'
+        cat "$RW_OUT/private/ufw-before$file" > "$file"
+    done < <(rw_ufw_files)
+    if [[ $active == true ]]; then ufw reload >/dev/null; else ufw --force disable >/dev/null; fi
+    jq '.status="reverted"' "$RW_OUT/private/security-state.json" | rw_atomic "$RW_OUT/private/security-state.json"
+    rw_manifest_set '.security.ufw="reverted"'
+    rw_security_host_state reverted
+    RW_UFW_MUTATING=0
+    rw_track_files
+    rw_info 'UFW settings restored because a fresh SSH connection was not confirmed.'
+}
+rw_security_host_state() {
+    local state=$1 file=/var/lib/pdm-remnawave-security/ufw-owner.json
+    [[ -f $file ]] || return 0
+    jq -e --arg owner "$RW_OWNER" '.owner==$owner' "$file" >/dev/null || rw_die 'Host firewall operation ownership conflict.'
+    jq --arg state "$state" '.status=$state' "$file" | rw_atomic "$file"
+}
+rw_security_configure() {
+    if (( ${RW_DRY_RUN:-0} )); then
+        rw_root; rw_owned; rw_verify_files
+        rw_security_ports > "$RW_TMP/security-preview-ports.json"
+        rw_security_plan "$RW_TMP/security-preview-ports.json"
+        local key=false package=true
+        if rw_root_key_present; then key=true; fi
+        if command -v ufw >/dev/null 2>&1; then package=false; fi
+        jq --argjson key "$key" --argjson package "$package" '.+{root_key_present:$key,ufw_package_install_required:$package,read_only:true}' "$RW_TMP/security-plan.json"
+        return
+    fi
+    rw_root; rw_os; rw_owned; rw_lock; rw_resume_writes; rw_verify_files; rw_security_idle
+    rw_security_capture; rw_security_apply; rw_track_files; rw_install_summary
+}
+rw_security_status() {
+    rw_owned
+    jq '{root_key:.security.root_key,ufw:.security.ufw}' "$RW_OUT/manifest.json"
+    if command -v ufw >/dev/null 2>&1; then ufw status verbose; fi
 }
 # shellcheck shell=bash
 rw_secrets() {
@@ -1845,7 +2094,7 @@ rw_apply() {
         [[ -z ${RW_VERSION_FILE:-} ]] || rw_die 'Use upgrade to change versions of an existing installation.'
         rw_owned
         rw_lock; rw_resume_writes
-        rw_verify_files; rw_ssh_idle
+        rw_verify_files; rw_ssh_idle; rw_security_idle
         [[ $(jq -r '.config_fingerprint' "$RW_OUT/manifest.json") == "$RW_FINGERPRINT" ]] || rw_die 'Configuration parameters changed; keys and configuration will not be overwritten.'
     else
         [[ ! -d $RW_OUT || -z $(find "$RW_OUT" -mindepth 1 -maxdepth 1 -print -quit) ]] || rw_die 'The directory is not empty and is not owned by the installer.'
@@ -1860,6 +2109,7 @@ rw_apply() {
         rw_render_compose; rw_render_caddy; rw_install_ctl; rw_track_files
     fi
     rw_owned; rw_compose config --quiet
+    rw_security_capture
     rw_info 'Pulling pinned Docker images.'
     rw_compose --profile public --profile node pull
     if ! rw_compose --profile public run --rm --no-deps --entrypoint caddy rw_caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile > "$RW_TMP/caddy-check.log" 2>&1; then
@@ -1880,6 +2130,7 @@ rw_apply() {
         elif ! grep -q '^SECRET_KEY=' "$RW_OUT/private/node.env"; then
             rw_manifest_set '.status="node-prepared-awaiting-attachment"'
             rw_info "Node prepared in $RW_OUT. Run rwctl node attach on the panel server; SECRET_KEY is not generated locally."
+            rw_security_apply
             rw_install_summary
             return
         fi
@@ -1891,6 +2142,7 @@ rw_apply() {
     if [[ $RW_ROLE != panel ]]; then rw_compose --profile node up -d rw_node; fi
     rw_manifest_set '.status="running-awaiting-acceptance"'
     rw_doctor
+    rw_security_apply
     rw_info "Containers started in $RW_OUT."
     rw_install_summary
 }
@@ -2135,6 +2387,10 @@ rw_uninstall() {
         jq 'sort' "$RW_TMP/containers.json" > "$RW_TMP/planned-containers.json"
         cmp -s "$RW_TMP/current-containers.json" "$RW_TMP/planned-containers.json" || rw_die 'The container inventory changed after confirmation.'
     fi
+    if [[ -f $RW_OUT/private/security-state.json && $(jq -r '.status' "$RW_OUT/private/security-state.json") == armed ]]; then
+        rw_security_revert
+        systemctl stop "$RW_PROJECT-ufw-revert.timer" >/dev/null 2>&1 || true
+    fi
     if [[ ${RW_PURGE:-0} != 1 && ${RW_PREPARED_ONLY:-0} != 1 ]]; then
         local recovery
         recovery=/var/backups/pdm-remnawave/$RW_ENV-config-$(date -u +%Y%m%dT%H%M%SZ).tgz
@@ -2320,11 +2576,11 @@ rw_restore_files() {
     rw_lock; RW_MUTATING=1
     if [[ ! -f $RW_OUT/manifest.json ]]; then
         jq --arg owner "$RW_OWNER" --arg fp "$RW_FINGERPRINT" --arg sha "$RW_BACKUP_SHA" \
-          '.api_namespace_owner //= .ownership_label | .ownership_label=$owner | .config_fingerprint=$fp | .status="restoring" | .restore_archive_sha256=$sha | .firewall_installed=false | .ufw_rules_added=false | .existing_caddy_updated=false | .managed_files=[] | del(.ssh)' "$source/manifest.json" | rw_atomic "$RW_OUT/manifest.json"
+          '.api_namespace_owner //= .ownership_label | .ownership_label=$owner | .config_fingerprint=$fp | .status="restoring" | .restore_archive_sha256=$sha | .firewall_installed=false | .ufw_rules_added=false | .existing_caddy_updated=false | .managed_files=[] | del(.ssh,.security)' "$source/manifest.json" | rw_atomic "$RW_OUT/manifest.json"
     fi
     rw_resume_writes
     while IFS= read -r path; do
-        [[ $path != rwctl && $path != compose.json && $path != config.json && $path != private/.managed-paths && $path != private/ssh-* && $path != plugins/stats/* && $path != private/stats.env && $path != private/stats.token ]] || continue
+        [[ $path != rwctl && $path != compose.json && $path != config.json && $path != private/.managed-paths && $path != private/ssh-* && $path != private/security-* && $path != private/ufw-before/* && $path != plugins/stats/* && $path != private/stats.env && $path != private/stats.token ]] || continue
         cat "$source/$path" | rw_atomic "$RW_OUT/$path"
     done < <(jq -r '.managed_files[].path' "$source/manifest.json")
     # Never execute archived shell code or trust an archived Compose with host mounts.
@@ -2961,19 +3217,22 @@ rw_interactive() {
         read -r -p 'Purpose test / production [production]: ' purpose; purpose=${purpose:-production}
         if [[ $purpose == test ]]; then read -r -p 'Resource profile standard / compact-test [standard]: ' profile; profile=${profile:-standard}; fi
     fi
+    RW_ROOT_PUBLIC_KEY=
+    rw_security_key_input
     jq -n --arg role "$role" --arg env "$env" --arg mode "$mode" --arg panel "$panel" --arg sub "$sub" --arg node "$node" --argjson ips "$ips" --argjson sources "$sources" --arg user "$user" --arg email "$email" \
-      --arg file "$file" --arg container "$container" --arg health "$health" --arg profile "$profile" --arg purpose "$purpose" \
-      '{schema_version:1,environment_id:$env,role:$role,network_mode:$mode,domains:({panel:$panel,subscription:$sub,node:$node}|with_entries(select(.value!=""))),public_addresses:$ips,panel_addresses:$sources,admin:{username:$user,email:$email},resources:{profile:$profile,purpose:$purpose}} | if $mode=="fi-parallel" then .existing_caddy={config_file:$file,container:$container,health_url:$health} else . end' > "$RW_TMP/interactive.json"
+      --arg file "$file" --arg container "$container" --arg health "$health" --arg profile "$profile" --arg purpose "$purpose" --arg rootkey "$RW_ROOT_PUBLIC_KEY" \
+      '{schema_version:1,environment_id:$env,role:$role,network_mode:$mode,domains:({panel:$panel,subscription:$sub,node:$node}|with_entries(select(.value!=""))),public_addresses:$ips,panel_addresses:$sources,admin:{username:$user,email:$email},resources:{profile:$profile,purpose:$purpose},security:{enabled:true}} | if $rootkey!="" then .security.root_public_key=$rootkey else . end | if $mode=="fi-parallel" then .existing_caddy={config_file:$file,container:$container,health_url:$health} else . end' > "$RW_TMP/interactive.json"
     RW_CONFIG=$RW_TMP/interactive.json
 }
 rw_help() {
     cat <<'RW_HELP'
-Remnawave - Linux/Bash/Docker Compose. No Python runtime required on the VPS.
+Remnawave - Linux/Bash/Docker Compose. UFW is installed from Debian APT.
 Installation:
   rw-setup.sh [--role panel|node|panel-node] [--config FILE] [--output DIR] [--versions FILE]
   rw-setup.sh --config FILE --dry-run
 Maintenance:
   rwctl info [--show-secrets]
+  rwctl security apply|confirm|revert|status
   rwctl plan|preflight|apply|doctor|backup --config FILE --output DIR
   rwctl restore --archive FILE [--config FILE] [--output DIR] [--dry-run]
   rwctl upgrade [--component all|panel|node|caddy|subscription] [--versions FILE] [--archive BACKUP_FILE] [--dry-run]
@@ -3033,6 +3292,10 @@ rw_main() {
         [[ ${1:-} == set ]] || rw_die 'site: use set.'
         command='site-set'; shift
     fi
+    if [[ $command == security ]]; then
+        case ${1:-} in apply|confirm|revert|status) command=security-$1;; *) rw_die 'security: apply, confirm, revert or status.';; esac
+        shift
+    fi
     while (( $# )); do
         case $1 in
           --help|-h) rw_help; return;;
@@ -3061,6 +3324,7 @@ rw_main() {
     done
     [[ $command != help ]] || { rw_help; return; }
     [[ $RW_SHOW_SECRETS == 0 || $command == info ]] || rw_die '--show-secrets is supported by info only.'
+    [[ $RW_DRY_RUN == 0 || ( $command != security-confirm && $command != security-revert ) ]] || rw_die 'Use security apply --dry-run to preview host security changes.'
     rw_init_tmp
     if [[ ( $command == setup || $command == restore ) && $RW_DRY_RUN == 0 ]]; then rw_root; rw_os; rw_deps; else rw_need jq; fi
     if [[ $command == restore ]]; then rw_restore; return; fi
@@ -3084,6 +3348,10 @@ rw_main() {
       preflight) rw_preflight;;
       doctor) rw_doctor;;
       info) rw_show_summary;;
+      security-apply) rw_security_configure;;
+      security-confirm) rw_security_confirm; rw_install_summary; rw_track_files;;
+      security-revert) rw_security_revert;;
+      security-status) rw_security_status;;
       backup) rw_backup;;
       upgrade) rw_upgrade;;
       rollback) rw_rollback;;

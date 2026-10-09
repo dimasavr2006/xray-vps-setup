@@ -251,7 +251,7 @@ rw_apply() {
         [[ -z ${RW_VERSION_FILE:-} ]] || rw_die 'Use upgrade to change versions of an existing installation.'
         rw_owned
         rw_lock; rw_resume_writes
-        rw_verify_files; rw_ssh_idle
+        rw_verify_files; rw_ssh_idle; rw_security_idle
         [[ $(jq -r '.config_fingerprint' "$RW_OUT/manifest.json") == "$RW_FINGERPRINT" ]] || rw_die 'Configuration parameters changed; keys and configuration will not be overwritten.'
     else
         [[ ! -d $RW_OUT || -z $(find "$RW_OUT" -mindepth 1 -maxdepth 1 -print -quit) ]] || rw_die 'The directory is not empty and is not owned by the installer.'
@@ -266,6 +266,7 @@ rw_apply() {
         rw_render_compose; rw_render_caddy; rw_install_ctl; rw_track_files
     fi
     rw_owned; rw_compose config --quiet
+    rw_security_capture
     rw_info 'Pulling pinned Docker images.'
     rw_compose --profile public --profile node pull
     if ! rw_compose --profile public run --rm --no-deps --entrypoint caddy rw_caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile > "$RW_TMP/caddy-check.log" 2>&1; then
@@ -286,6 +287,7 @@ rw_apply() {
         elif ! grep -q '^SECRET_KEY=' "$RW_OUT/private/node.env"; then
             rw_manifest_set '.status="node-prepared-awaiting-attachment"'
             rw_info "Node prepared in $RW_OUT. Run rwctl node attach on the panel server; SECRET_KEY is not generated locally."
+            rw_security_apply
             rw_install_summary
             return
         fi
@@ -297,6 +299,7 @@ rw_apply() {
     if [[ $RW_ROLE != panel ]]; then rw_compose --profile node up -d rw_node; fi
     rw_manifest_set '.status="running-awaiting-acceptance"'
     rw_doctor
+    rw_security_apply
     rw_info "Containers started in $RW_OUT."
     rw_install_summary
 }

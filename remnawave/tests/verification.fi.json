@@ -127,7 +127,73 @@
     "english_release_offhost_backup_checksum": "pass: fi-test-english-20261009T082218Z.tgz",
     "external_english_confluence_https": "pass: trusted HTTPS on fl.wf.md:24443",
     "installation_summary_and_saved_info": "pass: actual URLs/ports, private card 0600, no secrets in redirected output; 2026-10-09 08:55 UTC",
-    "summary_release_offhost_backup_checksum": "pass: fi-test-summary-20261009T085500Z.tgz"
+    "summary_release_offhost_backup_checksum": "pass: fi-test-summary-20261009T085500Z.tgz",
+    "ufw_enabled_and_fresh_root_ssh_verified": "pass: 2026-10-09 11:34 UTC; one-time rollback timer stopped after fresh SSH confirmation",
+    "root_authorized_keys_hash_preserved": true,
+    "external_tcp_reachability_unchanged_after_ufw": [
+      {
+        "port": 22,
+        "open": true
+      },
+      {
+        "port": 80,
+        "open": true
+      },
+      {
+        "port": 443,
+        "open": true
+      },
+      {
+        "port": 8443,
+        "open": true
+      },
+      {
+        "port": 37241,
+        "open": true
+      },
+      {
+        "port": 4123,
+        "open": true
+      },
+      {
+        "port": 53042,
+        "open": true
+      },
+      {
+        "port": 9443,
+        "open": true
+      },
+      {
+        "port": 9444,
+        "open": true
+      },
+      {
+        "port": 24443,
+        "open": true
+      },
+      {
+        "port": 28443,
+        "open": true
+      },
+      {
+        "port": 2222,
+        "open": false
+      },
+      {
+        "port": 13000,
+        "open": false
+      },
+      {
+        "port": 13010,
+        "open": false
+      },
+      {
+        "port": 13100,
+        "open": false
+      }
+    ],
+    "legacy_and_new_https_after_ufw": "pass",
+    "ufw_offhost_backup_checksum": "pass: fi-test-ufw-20261009T113416Z.tgz"
   },
   "resources": {
     "disk_free_bytes": 5132484608,
@@ -199,7 +265,7 @@
     "external IPv6 on a host with global IPv6 (FI has no global IPv6; network namespace tests passed)"
   ],
   "github_published": true,
-  "published_raw_process_substitution_and_uninstall": "pass: current summary release files byte-match canonical source; standalone wget preview and owned uninstall passed",
+  "published_raw_process_substitution_and_uninstall": "Prior access-card release passed; host-security release raw verification follows publication.",
   "observation_heartbeat_id": "remnawave-fi",
   "observation": {
     "started_at_utc": "2026-10-08T23:26:05Z",
@@ -225,6 +291,17 @@
     "panel_heap_mib": 160
   },
   "prior_github_commit": "8df96cfb53cbe85c86ce2e12ed1760bd2213d124",
-  "current_release": "English installer with terminal and private access card, read-only info, IP confirmation, Confluence and component updates",
-  "github_commit": "77b0622843cfe8d49fb244aa12fc09fb3821bb83"
+  "current_release": "Default UFW, conditional root public key, access card and confirmed host policy",
+  "security": {
+    "ufw": "active-confirmed",
+    "incoming": "deny",
+    "outgoing": "allow",
+    "routed": "deny",
+    "root_key": "existing-preserved",
+    "ssh_policy": "unchanged",
+    "legacy_tcp_udp_ports": "preserved",
+    "local_apis": "not publicly opened",
+    "node_api": "TCP 2222 allowed from panel container only",
+    "recurring_monitors_created": false
+  }
 }

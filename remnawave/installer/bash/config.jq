@@ -26,7 +26,10 @@ def port: type == "number" and . == floor and . >= 1 and . <= 65535;
 def require($ok; $message): if $ok then . else error($message) end;
 .
 | require(type == "object"; "config must be a JSON object")
-| require((keys - ["schema_version","environment_id","role","network_mode","domains","public_addresses","panel_addresses","management_address","ports","admin","resources","docker_subnet","acme","node_country","existing_caddy"]) == []; "unknown config field")
+| require((keys - ["schema_version","environment_id","role","network_mode","domains","public_addresses","panel_addresses","management_address","ports","admin","resources","docker_subnet","acme","node_country","existing_caddy","security"]) == []; "unknown config field")
+| require(.security==null or (.security|type=="object" and (keys-["enabled","root_public_key"]==[])); "unknown security field")
+| require(.security.enabled==null or (.security.enabled|type=="boolean"); "security.enabled must be boolean")
+| require(.security.root_public_key==null or (.security.root_public_key|type=="string" and length<=8192 and test("^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp256) [A-Za-z0-9+/=]+( [^\\r\\n]*)?$")); "root_public_key must be a public SSH key line")
 | require(.schema_version == 1; "expected config schema_version 1")
 | require(.environment_id | type == "string" and test("^[a-z][a-z0-9-]{2,19}$"); "environment_id: 3..20 letters/digits/hyphens")
 | require(.role == "panel" or .role == "node" or .role == "panel-node"; "invalid role")

@@ -36,19 +36,22 @@ rw_interactive() {
         read -r -p 'Purpose test / production [production]: ' purpose; purpose=${purpose:-production}
         if [[ $purpose == test ]]; then read -r -p 'Resource profile standard / compact-test [standard]: ' profile; profile=${profile:-standard}; fi
     fi
+    RW_ROOT_PUBLIC_KEY=
+    rw_security_key_input
     jq -n --arg role "$role" --arg env "$env" --arg mode "$mode" --arg panel "$panel" --arg sub "$sub" --arg node "$node" --argjson ips "$ips" --argjson sources "$sources" --arg user "$user" --arg email "$email" \
-      --arg file "$file" --arg container "$container" --arg health "$health" --arg profile "$profile" --arg purpose "$purpose" \
-      '{schema_version:1,environment_id:$env,role:$role,network_mode:$mode,domains:({panel:$panel,subscription:$sub,node:$node}|with_entries(select(.value!=""))),public_addresses:$ips,panel_addresses:$sources,admin:{username:$user,email:$email},resources:{profile:$profile,purpose:$purpose}} | if $mode=="fi-parallel" then .existing_caddy={config_file:$file,container:$container,health_url:$health} else . end' > "$RW_TMP/interactive.json"
+      --arg file "$file" --arg container "$container" --arg health "$health" --arg profile "$profile" --arg purpose "$purpose" --arg rootkey "$RW_ROOT_PUBLIC_KEY" \
+      '{schema_version:1,environment_id:$env,role:$role,network_mode:$mode,domains:({panel:$panel,subscription:$sub,node:$node}|with_entries(select(.value!=""))),public_addresses:$ips,panel_addresses:$sources,admin:{username:$user,email:$email},resources:{profile:$profile,purpose:$purpose},security:{enabled:true}} | if $rootkey!="" then .security.root_public_key=$rootkey else . end | if $mode=="fi-parallel" then .existing_caddy={config_file:$file,container:$container,health_url:$health} else . end' > "$RW_TMP/interactive.json"
     RW_CONFIG=$RW_TMP/interactive.json
 }
 rw_help() {
     cat <<'RW_HELP'
-Remnawave - Linux/Bash/Docker Compose. No Python runtime required on the VPS.
+Remnawave - Linux/Bash/Docker Compose. UFW is installed from Debian APT.
 Installation:
   rw-setup.sh [--role panel|node|panel-node] [--config FILE] [--output DIR] [--versions FILE]
   rw-setup.sh --config FILE --dry-run
 Maintenance:
   rwctl info [--show-secrets]
+  rwctl security apply|confirm|revert|status
   rwctl plan|preflight|apply|doctor|backup --config FILE --output DIR
   rwctl restore --archive FILE [--config FILE] [--output DIR] [--dry-run]
   rwctl upgrade [--component all|panel|node|caddy|subscription] [--versions FILE] [--archive BACKUP_FILE] [--dry-run]
@@ -108,6 +111,10 @@ rw_main() {
         [[ ${1:-} == set ]] || rw_die 'site: use set.'
         command='site-set'; shift
     fi
+    if [[ $command == security ]]; then
+        case ${1:-} in apply|confirm|revert|status) command=security-$1;; *) rw_die 'security: apply, confirm, revert or status.';; esac
+        shift
+    fi
     while (( $# )); do
         case $1 in
           --help|-h) rw_help; return;;
@@ -136,6 +143,7 @@ rw_main() {
     done
     [[ $command != help ]] || { rw_help; return; }
     [[ $RW_SHOW_SECRETS == 0 || $command == info ]] || rw_die '--show-secrets is supported by info only.'
+    [[ $RW_DRY_RUN == 0 || ( $command != security-confirm && $command != security-revert ) ]] || rw_die 'Use security apply --dry-run to preview host security changes.'
     rw_init_tmp
     if [[ ( $command == setup || $command == restore ) && $RW_DRY_RUN == 0 ]]; then rw_root; rw_os; rw_deps; else rw_need jq; fi
     if [[ $command == restore ]]; then rw_restore; return; fi
@@ -159,6 +167,10 @@ rw_main() {
       preflight) rw_preflight;;
       doctor) rw_doctor;;
       info) rw_show_summary;;
+      security-apply) rw_security_configure;;
+      security-confirm) rw_security_confirm; rw_install_summary; rw_track_files;;
+      security-revert) rw_security_revert;;
+      security-status) rw_security_status;;
       backup) rw_backup;;
       upgrade) rw_upgrade;;
       rollback) rw_rollback;;

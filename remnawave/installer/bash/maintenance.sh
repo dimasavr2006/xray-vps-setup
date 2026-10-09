@@ -98,6 +98,10 @@ rw_uninstall() {
         jq 'sort' "$RW_TMP/containers.json" > "$RW_TMP/planned-containers.json"
         cmp -s "$RW_TMP/current-containers.json" "$RW_TMP/planned-containers.json" || rw_die 'The container inventory changed after confirmation.'
     fi
+    if [[ -f $RW_OUT/private/security-state.json && $(jq -r '.status' "$RW_OUT/private/security-state.json") == armed ]]; then
+        rw_security_revert
+        systemctl stop "$RW_PROJECT-ufw-revert.timer" >/dev/null 2>&1 || true
+    fi
     if [[ ${RW_PURGE:-0} != 1 && ${RW_PREPARED_ONLY:-0} != 1 ]]; then
         local recovery
         recovery=/var/backups/pdm-remnawave/$RW_ENV-config-$(date -u +%Y%m%dT%H%M%SZ).tgz

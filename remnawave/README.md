@@ -2,7 +2,8 @@
 
 Linux installer for a panel, a standalone node, or both on one server. The
 supported server is **Debian 13 amd64**. Run as root. The installer uses Bash,
-APT, Docker Compose, curl and jq; Python is not required on the VPS.
+APT, Docker Compose, curl and jq. Host security uses Debian's UFW package,
+whose dependencies include Python; the installer itself remains Bash.
 
 ## Install and remove
 
@@ -50,6 +51,8 @@ All prompts and runtime messages are in English.
 8. For standard installs, select `test` or `production` (default: production).
    Tests may select `compact-test`. Parallel installs ask for the existing
    Caddyfile, container and HTTPS health URL, and default to `compact-test`.
+9. If root has no valid key in its configured `AuthorizedKeysFile`, paste one
+   public SSH key. Existing root keys are preserved and no extra key is appended.
 
 The standard panel uses HTTPS/443. A combined installation uses panel/9443,
 Reality/443 and XHTTP/8443. Separate subscription domains use the panel's HTTPS
@@ -90,6 +93,60 @@ Production panel admission requires at least 2 CPU, 4 GiB RAM and 20 GiB free
 disk. Standalone node admission starts at 1 CPU and 1 GiB RAM, with a separate
 disk budget. Compact tests enforce container limits and host headroom; they
 do not bypass available-memory checks or increase swap.
+
+## UFW and root access
+
+Host security is enabled during setup. UFW is installed from Debian APT when
+missing. The root public key is appended only when no existing valid root key
+was found. Existing lines, keys and SSH authentication policy are preserved;
+the installer does not generate a private SSH key on the VPS.
+
+Before starting the new stack, the installer records existing non-loopback
+TCP/UDP listeners and Docker publications. When enabling an inactive UFW, it
+preserves these ports, actual SSH ports and existing UFW rules. It sets default
+incoming deny and outgoing allow and enables IPv6 filtering. Installation web
+ports include HTTP3 UDP; node management is allowed only from panel source IPs.
+An already active incoming-deny policy receives additive installation rules;
+foreign listening ports are not automatically opened through its restrictions.
+Outgoing policy is retained for an already active UFW.
+
+After activation or a change to default incoming policy, reconnect SSH in a
+new terminal and run the command printed by the summary:
+
+```bash
+bash /opt/pdm-remnawave/vpn-main/rwctl security confirm
+```
+
+With a sudo administrator, preserve the SSH session variable:
+
+```bash
+sudo --preserve-env=SSH_CONNECTION bash /opt/pdm-remnawave/vpn-main/rwctl security confirm
+```
+
+A one-time five-minute watchdog restores the prior UFW configuration if the
+fresh connection is not confirmed. Confirmation stops that timer. It is not
+a recurring monitor. A conflicting external UFW change is reported rather
+than silently overwritten. For an existing installation:
+
+```bash
+bash /opt/pdm-remnawave/vpn-main/rwctl security apply --dry-run
+bash /opt/pdm-remnawave/vpn-main/rwctl security apply
+bash /opt/pdm-remnawave/vpn-main/rwctl security status
+```
+
+Noninteractive configuration can supply
+`security: {"enabled": true, "root_public_key": "ssh-ed25519 AAAA... owner"}`.
+Use an actual complete public key. `security.enabled=false` explicitly skips
+this host-security stage. An omitted security object uses the default without
+changing the fingerprint of an older saved configuration. Removal retains
+root keys, UFW, host SSH/preserved-service rules and default policy, deleting
+only rules tagged for the removed installation. Host-specific UFW rollback
+state is not copied from a backup onto a replacement server.
+
+Docker-published ports can bypass UFW; the installer also binds its private
+APIs to loopback and retains the separate scoped nftables protections for its
+management API/database/bridge. See
+[Docker firewall documentation](https://docs.docker.com/engine/network/packet-filtering-firewalls/).
 
 ## Default cover
 
@@ -205,7 +262,15 @@ Additional commands include `preflight`, `tls-test`, `ssh prepare` and
 
 ## Verification
 
-93 Bash checks and ShellCheck passed. Summary checks exercised three roles,
+103 Bash checks and ShellCheck passed. Host-security tests cover root key
+validation/preservation, public port discovery, legacy config compatibility,
+active-policy restrictions and read-only preview. Native Debian UFW namespace
+tests preserved TCP/UDP/IPv6 services, blocked unapproved listeners, confirmed
+a real fresh SSH connection and exercised the systemd rollback timer. On FI,
+UFW is enabled and confirmed; 15 external TCP probes retained their prior
+reachability, legacy/new HTTPS worked, root keys and container start times
+were unchanged, and the private backup was verified offhost.
+Summary checks exercised three roles,
 shared hostname ports, IPv6 copy commands, real terminal password display and
 password suppression in redirected output. FI verified its actual summary,
 root-only access card and installed `rwctl info` without changing secrets or

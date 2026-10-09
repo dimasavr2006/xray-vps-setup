@@ -39,6 +39,7 @@ passed 'panel domain resolves to a separately confirmed management allowlist'
 rw_choose_public_addresses() { printf '["203.0.113.20"]\n'; }
 rw_choose_panel_addresses() { printf '["198.51.100.10"]\n'; }
 RW_ROLE_ARG=
+rw_root_key_present() { return 0; }
 rw_interactive < <(printf '2\n\n1\nnode.example.com\n\n')
 rw_config_load "$RW_CONFIG"
 jq -e '.environment_id=="node-main" and .role=="node" and .panel_addresses==["198.51.100.10"] and .resources.purpose=="production"' "$RW_CFG" >/dev/null
