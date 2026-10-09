@@ -23,6 +23,8 @@ rw_verify_files() {
 }
 rw_doctor() {
     local id state service node_uuid attempts
+    : > "$RW_TMP/doctor-tokens.jsonl"
+    printf 'null\n' > "$RW_TMP/doctor-mfa.json"
     rw_owned; rw_docker_ownership
     [[ $(jq -r '.status' "$RW_OUT/manifest.json") != node-prepared-awaiting-attachment ]] || rw_die 'Нода подготовлена, но ещё не подключена к панели.'
     while IFS= read -r service; do
@@ -43,6 +45,8 @@ rw_doctor() {
     done < <(docker ps -aq --filter "label=io.pdm.remnawave.installation=$RW_OWNER")
     if [[ $RW_ROLE != node ]]; then
         rw_wait_panel; rw_panel_login
+        rw_tokens_status > "$RW_TMP/doctor-tokens.jsonl" || rw_die 'Токены панели требуют восстановления: rwctl tokens rotate.'
+        rw_mfa_status > "$RW_TMP/doctor-mfa.json"
         while IFS= read -r node_uuid; do
             for ((attempts=0; attempts<30; attempts++)); do
                 rw_api GET "/api/nodes/$node_uuid" '' "$RW_TMP/node-health.json" && jq -e '.response.isConnected==true and .response.isDisabled==false and .response.xrayUptime>0' "$RW_TMP/node-health.json" >/dev/null && break
@@ -51,7 +55,7 @@ rw_doctor() {
             jq -e '.response.isConnected==true and .response.isDisabled==false and .response.xrayUptime>0' "$RW_TMP/node-health.json" >/dev/null || rw_die 'Панель не подтвердила подключение ноды и работающий Xray.'
         done < <(jq -r '.nodes[].node_uuid' "$RW_OUT/inventory.json")
     fi
-    jq -n --arg e "$RW_ENV" --arg role "$RW_ROLE" '{schema_version:1,environment_id:$e,role:$role,containers_running:true,client_acceptance_required:true}'
+    jq -n --arg e "$RW_ENV" --arg role "$RW_ROLE" --slurpfile tokens "$RW_TMP/doctor-tokens.jsonl" --slurpfile mfa "$RW_TMP/doctor-mfa.json" '{schema_version:1,environment_id:$e,role:$role,containers_running:true,client_acceptance_required:true,tokens:$tokens,mfa:$mfa[0]}'
 }
 rw_resource_plan() {
     local kind=$1 command=$2 expression=$3 id owner

@@ -7,6 +7,7 @@ rw_api() {
     [[ -z $body ]] || args+=(--data-binary "@$body")
     code=$(curl "${args[@]}" --output "$target" --write-out '%{http_code}' "$RW_API_ROOT$path") || return 1
     [[ $code =~ ^2[0-9][0-9]$ ]] || return 1
+    [[ $code != 204 ]] || return 0
     jq -e 'type=="object" and has("response")' "$target" >/dev/null
 }
 rw_auth_header() {
@@ -38,29 +39,28 @@ rw_panel_login() {
     if [[ ${RW_MUTATING:-0} == 1 ]]; then rw_manifest_set '.admin_bootstrapped=true'; fi
 }
 rw_token() {
-    local key=$1 scopes=$2 body=$RW_TMP/token-request.json response=$RW_TMP/token-response.json uuid
-    if [[ -s $RW_OUT/private/$key.token ]]; then return; fi
-    # A lost create-token response cannot recover the token value. Stop for explicit revocation/rotation.
-    [[ $(jq -r --arg key "$key" '.token_intents[$key] // false' "$RW_OUT/manifest.json") == false ]] || rw_die 'Ранее начат выпуск API-токена без сохранённого ответа; нужна проверка/ротация этого токена.'
-    jq -n --arg name "${key}-${RW_OWNER:0:8}" --slurpfile scopes "$scopes" '{name:$name,expiresInDays:90,scopes:$scopes[0]}' | rw_atomic "$body"
-    rw_manifest_set '.token_intents[$key]=true' --arg key "$key"
-    rw_api POST /api/tokens "$body" "$response" || rw_die 'Выпуск токена не подтверждён; публикация не выполнялась.'
-    jq -er '.response.token' "$response" | rw_atomic "$RW_OUT/private/$key.token"
-    uuid=$(jq -er '.response.uuid' "$response")
-    jq --arg uuid "$uuid" --arg key "$key" '.tokens[$key]={uuid:$uuid,expires_at:(now+90*86400)}' "$RW_OUT/manifest.json" | rw_atomic "$RW_OUT/manifest.json"
+    local key=$1 scopes=$2
+    if [[ -s $RW_OUT/private/$key.token && $(jq -r --arg key "$key" '.tokens[$key].expires_at // 0|floor' "$RW_OUT/manifest.json") -gt $(date +%s) && $(jq -r --arg key "$key" '.token_operations[$key] // null' "$RW_OUT/manifest.json") == null ]]; then return; fi
+    rw_token_replace "$key" "$scopes" bootstrap
 }
-rw_panel_tokens() {
+rw_token_scopes() {
     rw_api GET /api/tokens/scopes '' "$RW_TMP/scopes.json" || rw_die 'Не удалось проверить каталог прав API.'
     jq '[.response.resources[].endpoints[]|select(.kind=="read" and (.path|test("/api/system/metadata$|/api/sub(/|$)|/api/subscriptions?(/|$)|/api/(subscription-page-configs?|subpage-configs?)(/|$)")))|.key]|unique' "$RW_TMP/scopes.json" > "$RW_TMP/subscription-scopes.json"
     jq -e 'length>0 and all(.!="*")' "$RW_TMP/subscription-scopes.json" >/dev/null || rw_die 'Не найдены минимальные права subscription-page; общий токен не выдаётся.'
-    rw_token subscription "$RW_TMP/subscription-scopes.json"
     jq '[.response.resources[].endpoints[]|select((.method|ascii_upcase)=="GET" or (.method|ascii_upcase)=="POST")|select(.path|test("^/api/(nodes|config-profiles|hosts|internal-squads)(/\\{[^/]+\\})?$|^/api/keygen$"))|.key]|unique' "$RW_TMP/scopes.json" > "$RW_TMP/installer-scopes.json"
     jq -e 'length>0 and all(.!="*")' "$RW_TMP/installer-scopes.json" >/dev/null || rw_die 'Не получены права управления нодой.'
-    rw_token installer "$RW_TMP/installer-scopes.json"
+}
+rw_subscription_env() {
     {
         printf 'APP_PORT=3010\nREMNAWAVE_PANEL_URL=http://rw_panel:3000\nTRUST_PROXY=1\nREMNAWAVE_API_TOKEN='
         tr -d '\n' < "$RW_OUT/private/subscription.token"; printf '\n'
     } | rw_atomic "$RW_OUT/private/subscription.env"
+}
+rw_panel_tokens() {
+    rw_token_scopes
+    rw_token subscription "$RW_TMP/subscription-scopes.json"
+    rw_token installer "$RW_TMP/installer-scopes.json"
+    rw_subscription_env
     rw_auth_header "$RW_OUT/private/installer.token"
 }
 rw_api_object() {
@@ -246,15 +246,17 @@ rw_existing_caddy_apply() {
     RW_CADDY_ROLLBACK_PENDING=0
 }
 rw_apply() {
-    rw_root; rw_os; rw_resource_checks; rw_dns_checks; rw_docker_install; rw_preflight
+    rw_root; rw_os
     if [[ -f $RW_OUT/manifest.json ]]; then
         [[ -z ${RW_VERSION_FILE:-} ]] || rw_die 'Для смены версий существующей установки используйте upgrade.'
         rw_owned
+        rw_lock; rw_resume_writes
         rw_verify_files; rw_ssh_idle
         [[ $(jq -r '.config_fingerprint' "$RW_OUT/manifest.json") == "$RW_FINGERPRINT" ]] || rw_die 'Параметры изменились; ключи и конфиги не перезаписываются.'
     else
         [[ ! -d $RW_OUT || -z $(find "$RW_OUT" -mindepth 1 -maxdepth 1 -print -quit) ]] || rw_die 'Каталог не пуст и не принадлежит установщику.'
     fi
+    rw_resource_checks; rw_dns_checks; rw_docker_install; rw_preflight
     rw_lock
     RW_MUTATING=1
     if [[ ! -f $RW_OUT/manifest.json ]]; then rw_manifest preparing; fi

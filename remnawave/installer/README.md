@@ -11,7 +11,8 @@ OpenSSL и nftables. Python-код и упакованный Python-runtime уд
 сертификата через ACME staging. В чистом Debian 13 WSL с собственным Docker
 прошли три роли, SSH/sudo-подключение отдельной ноды, восстановление,
 обновление и откат базы. WSL-проверка не заменяет чистый VPS с публичным DNS.
-48 часов наблюдения FI и привязка MFA владельцем остаются открытыми.
+MFA владельца на FI привязан и проверен. Наблюдение остановлено по решению
+владельца после 85 выборок без ошибок; 48 часов не завершены.
 
 ## Запуск
 
@@ -42,6 +43,11 @@ bash rw-setup.sh --config /private/install.json --dry-run
 в `/opt/pdm-remnawave/<environment_id>`. Другой каталог задаётся через `--output`.
 Предварительный `--dry-run` требует только установленного jq и не запускает сервисы.
 
+Мастер поддерживает `fi-parallel`: спрашивает Caddyfile действующего сайта,
+имя его контейнера, HTTPS URL проверки и профиль ресурсов. Для этого режима
+по умолчанию предлагается compact-test. У чистой установки назначение
+по умолчанию production; для небольшого стенда выберите test.
+
 ## Что делает установка
 
 1. Проверяет ОС/архитектуру, DNS A/AAAA, ресурсы, время, SSH-конфигурацию,
@@ -64,6 +70,20 @@ JSON профиля Xray служит входом для API. Он не мон�
 Caddy защищает административный сайт. Панель и подписки могут использовать один
 домен: тогда публичные подписки получают отдельный HTTPS-порт `9444`
 (`ports.subscription_https`). CORS содержит полный HTTPS origin с портом.
+
+Пароль Caddy Auth и пароль Remnawave различаются. `/r` открывает защитный
+портал Caddy, затем переходите в `/dashboard/home` для самой панели. При
+сохранённой сессии Remnawave её пароль повторно не спрашивается. MFA не
+заменяет учётную запись панели. Подписки административного входа не требуют.
+
+Можно указать `panel.example.com`, `sub.example.com` и `cover.example.com`
+с одинаковыми A/AAAA: Caddy выбирает сайт по домену, а установщик согласует
+URL подписок, CORS, redirect и Reality SNI. На одной машине с VPN по 443
+панель/подписки по умолчанию используют 9443; для одинакового домена подписки
+используют 9444. Панель без VPN может обслуживать разные сайты по 443.
+В текущем параллельном FI внешний 443 занят прежней системой. Произвольная
+замена домена или пути в адресной строке не меняет конфигурацию сервера;
+используйте заранее настроенный домен и штатные пути каждого сайта.
 
 ## Роли и параметры
 
@@ -153,6 +173,10 @@ bash /opt/pdm-remnawave/fi-test/rwctl tls-test
 bash /opt/pdm-remnawave/fi-test/rwctl stats install --stats-port 13100 --dry-run
 bash /opt/pdm-remnawave/fi-test/rwctl stats install --stats-port 13100
 bash /opt/pdm-remnawave/fi-test/rwctl stats status
+bash /opt/pdm-remnawave/fi-test/rwctl tokens status
+bash /opt/pdm-remnawave/fi-test/rwctl tokens rotate --token all
+bash /opt/pdm-remnawave/fi-test/rwctl mfa status
+bash /opt/pdm-remnawave/fi-test/rwctl mfa guide
 ```
 
 Stats addon сохраняет интервальные дельты и подтверждения существующего сборщика
@@ -164,6 +188,21 @@ Manifest формата 2 помечен `implementation: bash-docker`. Inventor
 версии форматов и environment_id. Секреты — отдельные файлы 0600 в каталоге 0700;
 логи не выводят токены/пароли. Повтор использует сохранённые секреты, а изменение
 config fingerprint/чужой объект API вызывает остановку. Операции блокируются flock.
+
+Токены подписок и установщика действуют 90 дней. `doctor`/`tokens status`
+показывают фактический срок и предупреждают за семь дней. `tokens rotate`
+проверяет права, выпускает замену, проверяет API и готовность сервиса, затем
+отзывает прежний токен. При отказе активации подписок прежний токен
+возвращается. Периодическое задание не создаётся.
+
+После обрыва повторите исходную команду с тем же config/output; для ротации
+повторите `tokens rotate` с тем же назначением. `.rw-write.json` сохраняет
+хеши и временный файл незавершённой записи; журнал токена хранит фиксированные
+имя, права и предыдущий UUID. Не удаляйте журналы или secret-файлы вручную.
+Потерянный ответ выпуска восстанавливается отзывом только собственного
+неопубликованного токена. Неизвестные изменения и неоднозначные совпадения
+останавливают процесс. Проверены SIGKILL и потеря API-ответов; это не
+гарантия сохранности при повреждении диска или потере всего каталога.
 
 Backup включает согласованный pg_dump, файлы установки и тома Caddy с MFA и
 сертификатами; архив проверяется и закрывается правами 0600. Перед переключением
@@ -227,6 +266,9 @@ bash installer/build-entrypoints.sh --check
 shellcheck -S warning rw-setup.sh uninstall.sh rwctl installer/build-entrypoints.sh
 bash tests/bash/unit.sh
 bash tests/bash/recovery-unit.sh
+bash tests/bash/stats-unit.sh
+bash tests/bash/interruption-unit.sh
+bash tests/bash/tokens-unit.sh
 sudo bash tests/bash/http-entrypoints.sh
 sudo bash tests/bash/live-compose.sh
 ```
@@ -249,8 +291,12 @@ sudo bash tests/bash/live-compose.sh
 На отдельном Debian 13 WSL прошли чистые panel/node/panel-node и полный CLI
 backup/purge/restore/upgrade/rollback. Проверен откат после добавления новой
 таблицы и реальное обновление PostgreSQL 18.3 → 18.4 на компонентном стенде.
-44 основных, 9 archive/upgrade и 7 stats Bash-проверок проходят. Отчёт обслуживания:
+44 основных, 9 archive/upgrade, 7 stats, 7 interruption/wizard/MFA и 7 token
+safety Bash-проверок проходят — всего 74. Живые проверки ротации, обрыва
+bootstrap и MFA/restore описаны в [verification.installer-followup.json](../tests/verification.installer-followup.json).
+Отчёт обслуживания:
 [verification.maintenance.json](../tests/verification.maintenance.json).
-FI наблюдается каждые пять минут до **11.10.2026 02:26 МСК**. Привязка MFA
-владельцем и чистый VPS с публичным DNS остаются открытыми. На FI нет глобального
-IPv6; IPv6-проверки выполняются отдельно в сетевом стенде.
+Наблюдение FI остановлено 09.10 по решению владельца: 85 выборок без ошибок,
+48 часов не завершены. Timer выключен; heartbeat в приложении отсутствует.
+MFA владельца на FI привязан и проверен. Чистый VPS с публичным DNS остаётся
+открытой приёмкой. На FI нет глобального IPv6; проверки выполнялись в стенде.

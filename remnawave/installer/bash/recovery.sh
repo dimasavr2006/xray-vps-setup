@@ -85,13 +85,16 @@ rw_restore_files() {
         jq -e --arg sha "$RW_BACKUP_SHA" '.status=="restoring" and .restore_archive_sha256==$sha' "$RW_OUT/manifest.json" >/dev/null || rw_die 'Restore предназначен для пустой установки; существующую систему не перезаписываем.'
     else [[ ! -d $RW_OUT || -z $(find "$RW_OUT" -mindepth 1 -maxdepth 1 -print -quit) ]] || rw_die 'Каталог восстановления не пуст.'; fi
     rw_lock; RW_MUTATING=1
+    if [[ ! -f $RW_OUT/manifest.json ]]; then
+        jq --arg owner "$RW_OWNER" --arg fp "$RW_FINGERPRINT" --arg sha "$RW_BACKUP_SHA" \
+          '.api_namespace_owner //= .ownership_label | .ownership_label=$owner | .config_fingerprint=$fp | .status="restoring" | .restore_archive_sha256=$sha | .firewall_installed=false | .ufw_rules_added=false | .existing_caddy_updated=false | .managed_files=[] | del(.ssh)' "$source/manifest.json" | rw_atomic "$RW_OUT/manifest.json"
+    fi
+    rw_resume_writes
     while IFS= read -r path; do
         [[ $path != rwctl && $path != compose.json && $path != config.json && $path != private/.managed-paths && $path != private/ssh-* && $path != plugins/stats/* && $path != private/stats.env && $path != private/stats.token ]] || continue
         cat "$source/$path" | rw_atomic "$RW_OUT/$path"
     done < <(jq -r '.managed_files[].path' "$source/manifest.json")
     # Never execute archived shell code or trust an archived Compose with host mounts.
-    jq --arg owner "$RW_OWNER" --arg fp "$RW_FINGERPRINT" --arg sha "$RW_BACKUP_SHA" \
-      '.api_namespace_owner //= .ownership_label | .ownership_label=$owner | .config_fingerprint=$fp | .status="restoring" | .restore_archive_sha256=$sha | .firewall_installed=false | .ufw_rules_added=false | .existing_caddy_updated=false | .managed_files=[] | del(.ssh)' "$source/manifest.json" | rw_atomic "$RW_OUT/manifest.json"
     cat "$RW_CFG" | rw_atomic "$RW_OUT/config.json"
     if [[ $RW_ROLE != node ]]; then
         local token=$source/private/subscription.token

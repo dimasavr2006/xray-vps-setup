@@ -1,12 +1,13 @@
 # shellcheck shell=bash
 rw_interactive() {
-    local role=${RW_ROLE_ARG:-} env mode panel='' sub='' node='' ips sources='' user='' email=''
+    local role=${RW_ROLE_ARG:-} env mode panel='' sub='' node='' ips sources='' user='' email='' file='' container='' health='' profile=standard purpose
     if [[ -z $role ]]; then
         printf '\nRemnawave: 1) панель  2) отдельная нода  3) панель и нода\n' >&2
         read -r -p 'Режим [3]: ' role; case ${role:-3} in 1) role=panel;; 2) role=node;; 3) role='panel-node';; *) rw_die 'Неверный режим.';; esac
     fi
     read -r -p 'ID окружения (например fi-test): ' env
     read -r -p 'Режим сети clean / fi-parallel [clean]: ' mode; mode=${mode:-clean}
+    [[ $mode != fi-parallel || $role == panel-node ]] || rw_die 'Параллельный режим требует панель и ноду.'
     if [[ $role != node ]]; then
         read -r -p 'Домен панели: ' panel
         read -r -p "Домен подписок [$panel]: " sub; sub=${sub:-$panel}
@@ -17,10 +18,19 @@ rw_interactive() {
     fi
     read -r -p 'Публичные IPv4/IPv6 через запятую: ' ips
     [[ $role != node ]] || read -r -p 'IP панели для управления через запятую: ' sources
+    if [[ $mode == fi-parallel ]]; then
+        read -r -p 'Путь к Caddyfile действующего Caddy: ' file
+        read -r -p 'Имя действующего контейнера Caddy [caddy]: ' container; container=${container:-caddy}
+        read -r -p 'HTTPS URL проверки действующего сайта: ' health
+        read -r -p 'Профиль ресурсов standard / compact-test [compact-test]: ' profile; profile=${profile:-compact-test}
+        purpose='test'
+    else
+        read -r -p 'Назначение test / production [production]: ' purpose; purpose=${purpose:-production}
+    fi
     jq -n --arg role "$role" --arg env "$env" --arg mode "$mode" --arg panel "$panel" --arg sub "$sub" --arg node "$node" --arg ips "$ips" --arg sources "$sources" --arg user "$user" --arg email "$email" \
-      '{schema_version:1,environment_id:$env,role:$role,network_mode:$mode,domains:({panel:$panel,subscription:$sub,node:$node}|with_entries(select(.value!=""))),public_addresses:($ips|split(",")|map(gsub("^ +| +$";""))),panel_addresses:($sources|split(",")|map(select(length>0)|gsub("^ +| +$";""))),admin:{username:$user,email:$email}}' > "$RW_TMP/interactive.json"
+      --arg file "$file" --arg container "$container" --arg health "$health" --arg profile "$profile" --arg purpose "$purpose" \
+      '{schema_version:1,environment_id:$env,role:$role,network_mode:$mode,domains:({panel:$panel,subscription:$sub,node:$node}|with_entries(select(.value!=""))),public_addresses:($ips|split(",")|map(gsub("^ +| +$";""))),panel_addresses:($sources|split(",")|map(select(length>0)|gsub("^ +| +$";""))),admin:{username:$user,email:$email},resources:{profile:$profile,purpose:$purpose}} | if $mode=="fi-parallel" then .existing_caddy={config_file:$file,container:$container,health_url:$health} else . end' > "$RW_TMP/interactive.json"
     RW_CONFIG=$RW_TMP/interactive.json
-    if [[ $mode == fi-parallel ]]; then rw_die 'Для параллельного FI нужен config файл с existing_caddy; используйте пример installer/examples/fi-parallel.json.'; fi
 }
 rw_help() {
     cat <<'RW_HELP'
@@ -38,6 +48,9 @@ Remnawave — Linux/Bash/Docker Compose. На VPS Python не нужен.
   rwctl tls-test [--test-http-port 18082] [--test-https-port 19447] [--dry-run]
   rwctl stats install [--stats-port 13100] [--archive BACKUP_FILE] [--dry-run]
   rwctl stats status
+  rwctl tokens status
+  rwctl tokens rotate [--token all|subscription|installer] [--dry-run]
+  rwctl mfa status|guide
   rwctl node attach --config PANEL_FILE --output PANEL_DIR --ssh USER@HOST --node-config NODE_FILE
 Удаление:
   uninstall.sh --output DIR [--dry-run] [--purge] [--yes]
@@ -53,7 +66,7 @@ rw_plan() {
 rw_main() {
     local entry=$1 command
     shift; rw_linux
-    RW_CONFIG=; RW_OUT=; RW_CONNECTION=; RW_DRY_RUN=0; RW_YES=0; RW_PURGE=0; RW_PREPARED_ONLY=0; RW_ROLE_ARG=; RW_ARCHIVE=; RW_SSH=; RW_NODE_CONFIG=; RW_VERSION_FILE=; RW_SSH_ADMIN=; RW_SSH_PUBLIC_KEY=; RW_SSH_NONCE=; RW_TLS_HTTP=; RW_TLS_HTTPS=; RW_STATS_PORT=; RW_STATS_SOURCE_MANIFEST=
+    RW_CONFIG=; RW_OUT=; RW_CONNECTION=; RW_DRY_RUN=0; RW_YES=0; RW_PURGE=0; RW_PREPARED_ONLY=0; RW_ROLE_ARG=; RW_ARCHIVE=; RW_SSH=; RW_NODE_CONFIG=; RW_VERSION_FILE=; RW_SSH_ADMIN=; RW_SSH_PUBLIC_KEY=; RW_SSH_NONCE=; RW_TLS_HTTP=; RW_TLS_HTTPS=; RW_STATS_PORT=; RW_STATS_SOURCE_MANIFEST=; RW_TOKEN_PURPOSE=all
     if [[ $entry == ctl ]]; then
         command=${1:-help}; (( $#==0 )) || shift
         [[ $command != --help && $command != -h ]] || command=help
@@ -72,6 +85,14 @@ rw_main() {
         case ${1:-} in install|status) command=stats-$1;; *) rw_die 'stats: install или status.';; esac
         shift
     fi
+    if [[ $command == tokens ]]; then
+        case ${1:-} in status|rotate) command=tokens-$1;; *) rw_die 'tokens: status или rotate.';; esac
+        shift
+    fi
+    if [[ $command == mfa ]]; then
+        case ${1:-} in status|guide) command=mfa-$1;; *) rw_die 'mfa: status или guide.';; esac
+        shift
+    fi
     while (( $# )); do
         case $1 in
           --help|-h) rw_help; return;;
@@ -87,6 +108,7 @@ rw_main() {
           --test-http-port) [[ $# -ge 2 ]] || rw_die 'Нужен PORT.'; RW_TLS_HTTP=$2; shift;;
           --test-https-port) [[ $# -ge 2 ]] || rw_die 'Нужен PORT.'; RW_TLS_HTTPS=$2; shift;;
           --stats-port) [[ $# -ge 2 ]] || rw_die 'Нужен PORT.'; RW_STATS_PORT=$2; shift;;
+          --token) [[ $# -ge 2 ]] || rw_die 'Нужно назначение токена.'; RW_TOKEN_PURPOSE=$2; shift;;
           --ssh) [[ $# -ge 2 ]] || rw_die 'Нужен HOST.'; RW_SSH=$2; shift;;
           --node-config) [[ $# -ge 2 ]] || rw_die 'Нужен FILE.'; RW_NODE_CONFIG=$2; shift;;
           --dry-run) RW_DRY_RUN=1;; --yes) RW_YES=1;; --purge) RW_PURGE=1;; --prepared-only) RW_PREPARED_ONLY=1;;
@@ -130,6 +152,10 @@ rw_main() {
       tls-test) rw_tls_test;;
       stats-install) rw_stats_install;;
       stats-status) rw_stats_status;;
+      tokens-status) rw_owned; rw_tokens_status;;
+      tokens-rotate) rw_tokens_rotate;;
+      mfa-status) rw_mfa_status;;
+      mfa-guide) rw_mfa_guide;;
       uninstall) rw_uninstall;;
       *) rw_die "Неизвестная команда $command.";;
     esac

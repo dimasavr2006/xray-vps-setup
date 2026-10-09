@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-09",
+  "scope": "Installer plan follow-up items 1, 2, 3, 7",
+  "runtime": "Linux/Bash/Docker; no Python installer runtime",
+  "bash_checks": {"main":44,"recovery":9,"stats":7,"interruption_wizard_mfa":7,"tokens":7,"total":74},
+  "checks": {
+    "live_token_rotation_subscription_and_installer": "pass",
+    "lost_token_create_reply_keeps_old_until_candidate_ready": "pass; own unpublished orphan revoked; one active token remains",
+    "lost_delete_204_reply": "pass; absence confirmed through admin catalog",
+    "failed_subscription_activation": "pass; previous token restored, retry reused candidate",
+    "sigkill_after_persisted_candidate": "pass; no extra token creation",
+    "foreign_token_name_scopes_and_duplicate_matches": "pass; no revocation attempted",
+    "actual_api_expiry_and_seven_day_warning": "pass; expired tokens fail status",
+    "sigkill_file_write_before_rename_after_rename_after_manifest": "pass",
+    "external_change_during_interrupted_write": "pass; conflict reported, file preserved",
+    "interrupted_managed_deletion": "pass",
+    "real_bootstrap_sigkill_after_admin_token_profile_responses": "pass; stable secrets and recorded API UUIDs after continuation",
+    "repeated_apply": "pass; one owned profile and two owned tokens; default backend profile excluded from owned count",
+    "lost_profile_create_reply": "pass; fixed intent reconciliation, repeat preserves UUID",
+    "interactive_fi_config_single_domain": "pass; collects existing Caddy and defaults compact-test",
+    "mfa_password_only_access_denied": "pass",
+    "mfa_wrong_totp_denied_correct_totp_accepted": "pass",
+    "mfa_fresh_session": "pass",
+    "mfa_caddy_recreate": "pass",
+    "mfa_full_backup_purge_restore": "pass",
+    "fi_owner_enrollment": "pass; owner confirmed fresh login; active TOTP presence verified over trusted SSH",
+    "separate_remnawave_authentication": "pass; authenticated Caddy session without Remnawave JWT receives 401 from users API",
+    "shellcheck_warning_level": "pass",
+    "deterministic_entrypoint_build": "pass",
+    "fi_cli_promotion_and_mfa_offhost_backup": "pass; doctor verified; backup checksum verified"
+  },
+  "cleanup": {"owned_ci_containers_networks_volumes_removed":true,"ci_mfa_backup_saved_offhost":true,"base_debian_and_image_cache_retained":true},
+  "observation": {"stopped_by_owner":true,"timer_enabled":false,"timer_active":false,"heartbeat_exists":false,"samples":85,"failed_samples":0,"max_gap_seconds":301,"completed_48h":false,"offhost_reports_saved":true},
+  "limits": [
+    "Local bootstrap interruption tests exercised real deployment/API, with public DNS/resource admission tested separately and internal TLS; not a provider DNS/ACME acceptance.",
+    "No claim of recovery from physical disk damage or loss of the installation directory.",
+    "Clean provider VPS, external global IPv6 and full legacy transit failure-isolation acceptance remain open."
+  ]
+}

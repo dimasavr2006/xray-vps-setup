@@ -18,13 +18,53 @@ rw_atomic() {
     [[ ! -L $target ]] || rw_die 'Символьная ссылка вместо управляемого файла.'
     mkdir -p -- "$(dirname -- "$target")"
     temp=$(mktemp "${target}.tmp.XXXXXX")
-    cat > "$temp"; chmod 600 "$temp"; mv -f -- "$temp" "$target"
-    if [[ -n ${RW_OUT:-} && $target == "$RW_OUT/"* && $target != "$RW_OUT/manifest.json" ]]; then
-        mkdir -p "$RW_OUT/private"
-        printf '%s\n' "${target#"$RW_OUT/"}" >> "$RW_OUT/private/.managed-paths"
-        chmod 600 "$RW_OUT/private/.managed-paths"
-    fi
+    cat > "$temp"; chmod 600 "$temp"
+    if [[ -f ${RW_OUT:-}/manifest.json && $target == "$RW_OUT/"* && $target != "$RW_OUT/manifest.json" && $target != "$RW_OUT/private/.managed-paths" ]]; then
+        rw_write_begin "$target" "$temp"
+        rw_resume_writes
+    else mv -f -- "$temp" "$target"; fi
 }
+rw_plain_atomic() {
+    local target=$1 temp
+    [[ ! -L $target ]] || rw_die 'Символьная ссылка вместо журнала.'
+    temp=$(mktemp "${target}.tmp.XXXXXX")
+    cat > "$temp"; chmod 600 "$temp"; mv -f -- "$temp" "$target"
+}
+rw_write_begin() {
+    local target=$1 temp=${2:-} previous='' next=''
+    [[ ! -f $RW_OUT/.rw-write.json ]] || rw_die 'Незавершённая запись: сначала восстановите журнал.'
+    [[ ! -f $target ]] || previous=$(sha256sum "$target" | cut -d' ' -f1)
+    [[ -z $temp ]] || next=$(sha256sum "$temp" | cut -d' ' -f1)
+    jq -n --arg owner "$RW_OWNER" --arg path "${target#"$RW_OUT/"}" --arg temp "${temp#"$RW_OUT/"}" --arg previous "$previous" --arg next "$next" \
+      '{schema_version:1,owner:$owner,path:$path,temp:$temp,previous:$previous,next:$next}' | rw_plain_atomic "$RW_OUT/.rw-write.json"
+}
+rw_resume_writes() {
+    [[ -f $RW_OUT/.rw-write.json ]] || return 0
+    local path temp previous next current='' target
+    [[ ! -L $RW_OUT/.rw-write.json && $(stat -c %a "$RW_OUT/.rw-write.json") == 600 ]] || rw_die 'Некорректные права журнала записи.'
+    jq -e --arg owner "$RW_OWNER" '.schema_version==1 and .owner==$owner and (.path|type=="string" and test("^[A-Za-z0-9_./-]+$") and startswith("/")==false and contains("..")==false) and (.path!="manifest.json" and .path!=".rw-write.json") and ([.previous,.next]|all(.=="" or test("^[a-f0-9]{64}$")))' "$RW_OUT/.rw-write.json" >/dev/null || rw_die 'Журнал записи не принадлежит установке.'
+    path=$(jq -r '.path' "$RW_OUT/.rw-write.json"); temp=$(jq -r '.temp' "$RW_OUT/.rw-write.json")
+    previous=$(jq -r '.previous' "$RW_OUT/.rw-write.json"); next=$(jq -r '.next' "$RW_OUT/.rw-write.json")
+    target=$RW_OUT/$path; rw_safe_parents "$target"
+    [[ ! -L $target && ( ! -e $target || -f $target ) ]] || rw_die 'Необычный тип файла в незавершённой записи.'
+    [[ ! -f $target ]] || current=$(sha256sum "$target" | cut -d' ' -f1)
+    [[ $current == "$previous" || $current == "$next" ]] || rw_die 'Файл изменён вне установщика во время незавершённой записи.'
+    if [[ -n $next ]]; then
+        [[ $temp == "$path.tmp."* && $temp != *'..'* && $temp != /* ]] || rw_die 'Некорректный временный путь журнала.'
+        rw_safe_parents "$RW_OUT/$temp"
+        if [[ $current != "$next" ]]; then
+            [[ -f $RW_OUT/$temp && ! -L $RW_OUT/$temp && $(sha256sum "$RW_OUT/$temp" | cut -d' ' -f1) == "$next" ]] || rw_die 'Не сохранилось содержимое незавершённой записи.'
+            mv -f -- "$RW_OUT/$temp" "$target"
+        fi
+        jq --arg path "$path" --arg sum "$next" '.managed_files=([.managed_files[]|select(.path!=$path)]+[{path:$path,sha256:$sum}])' "$RW_OUT/manifest.json" | rw_plain_atomic "$RW_OUT/manifest.json"
+        [[ ! -e $RW_OUT/$temp ]] || rm -f -- "$RW_OUT/$temp"
+    else
+        rm -f -- "$target"
+        jq --arg path "$path" '.managed_files|=map(select(.path!=$path))' "$RW_OUT/manifest.json" | rw_plain_atomic "$RW_OUT/manifest.json"
+    fi
+    rm -f -- "$RW_OUT/.rw-write.json"
+}
+rw_managed_remove() { rw_write_begin "$RW_OUT/$1"; rw_resume_writes; }
 rw_jwrite() { local target=$1; shift; jq "$@" | rw_atomic "$target"; }
 rw_lock() {
     [[ ${RW_LOCK_DIR:-} != "$RW_OUT" ]] || return 0

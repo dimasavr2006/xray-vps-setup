@@ -117,7 +117,10 @@
       }
     ],
     "stats_addon": "pass: installed 2026-10-09 01:09 UTC; native collector witness and read-only API",
-    "stats_offhost_backup_checksum": "pass"
+    "stats_offhost_backup_checksum": "pass",
+    "owner_mfa_enrollment": "pass: owner confirmed fresh login; active TOTP verified 2026-10-09",
+    "owner_mfa_offhost_backup_checksum": "pass",
+    "tokens_status_and_mfa_doctor": "pass: promoted follow-up rwctl without container restart"
   },
   "resources": {
     "disk_free_bytes": 5132484608,
@@ -185,10 +188,8 @@
   "existing_caddy_changed_only_for_acme": true,
   "main_bot_and_user_databases_changed": false,
   "pending": [
-    "owner MFA enrollment",
     "clean provider VPS roles with public DNS (Debian WSL role tests passed)",
-    "external IPv6 on a host with global IPv6 (FI has no global IPv6; network namespace tests passed)",
-    "48h observation"
+    "external IPv6 on a host with global IPv6 (FI has no global IPv6; network namespace tests passed)"
   ],
   "github_published": true,
   "github_commit": "4f035e9b6f137f89325aea0e94e3de70a90970bd",
@@ -200,10 +201,14 @@
     "interval_seconds": 300,
     "report": "/var/lib/pdm-remnawave-observation/fi-test/summary.json",
     "completed": false,
-    "checked_at_utc": "2026-10-09T04:51:52Z",
-    "samples": 66,
+    "checked_at_utc": "2026-10-09T06:27:06Z",
+    "samples": 85,
     "failed_samples": 0,
-    "max_gap_seconds": 301
+    "max_gap_seconds": 301,
+    "status": "stopped-by-owner",
+    "timer_enabled": false,
+    "heartbeat_exists": false,
+    "offhost_reports_saved": true
   },
   "stats": {
     "installed_at_utc": "2026-10-09T01:09:39Z",

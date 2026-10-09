@@ -16,8 +16,9 @@ HTTPS-порты. Пароли и Reality-ключи генерируются о
 
 Для установки с явными портами, адресами и бюджетом ресурсов используйте
 [JSON-примеры](installer/examples) и `--config /private/install.json`.
-Параллельная установка на занятом сервере требует явного config;
-пример FI нельзя запускать без подстановки своих параметров.
+Мастер параллельной установки спрашивает параметры действующего Caddy и
+профиль ресурсов. JSON-пример FI требует подстановки своих параметров.
+Разные домены панели, подписок и заглушки могут указывать на один IP.
 
 ```bash
 bash /opt/pdm-remnawave/ENV/rwctl doctor
@@ -28,6 +29,10 @@ bash /opt/pdm-remnawave/ENV/rwctl rollback --archive /private-backups/pre-upgrad
 bash /opt/pdm-remnawave/ENV/rwctl stats install --stats-port 13100 --dry-run
 bash /opt/pdm-remnawave/ENV/rwctl stats install --stats-port 13100
 bash /opt/pdm-remnawave/ENV/rwctl stats status
+bash /opt/pdm-remnawave/ENV/rwctl tokens status
+bash /opt/pdm-remnawave/ENV/rwctl tokens rotate --token all
+bash /opt/pdm-remnawave/ENV/rwctl mfa status
+bash /opt/pdm-remnawave/ENV/rwctl mfa guide
 ```
 
 Backup вместе с `.sha256` храните вне VPS. Restore сохраняет ключи/API-ID,
@@ -42,12 +47,15 @@ major PostgreSQL меняется отдельной миграцией. Уда�
 реальные клиенты отдельной ноды, IPv4/IPv6 firewall и полный CLI
 backup/purge/restore/upgrade/rollback. Stats addon также прошёл восстановление,
 обновление, откат и отказ с возвратом прежнего стека; работает на FI.
-Проходят 44 + 9 + 7 Bash-проверок и
+Токены имеют ручную ротацию с журналом, проверкой перед отзывом и возвратом
+при отказе активации. SIGKILL при bootstrap и записи файлов, потеря API-ответов,
+полный TOTP-вход и сохранение MFA после restore проверены.
+Проходят 44 + 9 + 7 + 7 + 7 = 74 Bash-проверки и
 реальный запуск через wget/process substitution.
 
-Комплект остаётся тестовым: 48 часов FI-наблюдения заканчиваются
-**11.10.2026 02:26 МСК**, MFA привязывает владелец. Чистый VPS с публичным
-DNS остаётся отдельной приёмкой; WSL её полностью не заменяет.
+Комплект остаётся тестовым. Наблюдение остановлено по решению владельца:
+85 выборок без ошибок, 48 часов не завершены. Личная MFA-привязка владельца
+на FI подтверждена. Чистый VPS с публичным DNS остаётся отдельной приёмкой.
 Этот установщик не переносит рабочую базу и не переключает Telegram-бота.
 Корневые скрипты данного репозитория по-прежнему устанавливают Marzneshin.
 

@@ -18,7 +18,7 @@ build() {
         cat "$ROOT/stats/$file"
         printf '\nRW_STATS_PAYLOAD\n}\n'
     done
-    for file in common render preflight deploy maintenance recovery upgrade stats ssh tls cli; do cat "$ROOT/installer/bash/$file.sh"; done
+    for file in common render preflight deploy tokens maintenance recovery upgrade stats ssh tls mfa cli; do cat "$ROOT/installer/bash/$file.sh"; done
     printf '\nrw_main %s "$@"\n' "$command"
 }
 for spec in 'rw-setup.sh:setup' 'uninstall.sh:uninstall' 'rwctl:ctl'; do

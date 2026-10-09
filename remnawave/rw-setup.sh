@@ -762,13 +762,53 @@ rw_atomic() {
     [[ ! -L $target ]] || rw_die 'Символьная ссылка вместо управляемого файла.'
     mkdir -p -- "$(dirname -- "$target")"
     temp=$(mktemp "${target}.tmp.XXXXXX")
-    cat > "$temp"; chmod 600 "$temp"; mv -f -- "$temp" "$target"
-    if [[ -n ${RW_OUT:-} && $target == "$RW_OUT/"* && $target != "$RW_OUT/manifest.json" ]]; then
-        mkdir -p "$RW_OUT/private"
-        printf '%s\n' "${target#"$RW_OUT/"}" >> "$RW_OUT/private/.managed-paths"
-        chmod 600 "$RW_OUT/private/.managed-paths"
-    fi
+    cat > "$temp"; chmod 600 "$temp"
+    if [[ -f ${RW_OUT:-}/manifest.json && $target == "$RW_OUT/"* && $target != "$RW_OUT/manifest.json" && $target != "$RW_OUT/private/.managed-paths" ]]; then
+        rw_write_begin "$target" "$temp"
+        rw_resume_writes
+    else mv -f -- "$temp" "$target"; fi
 }
+rw_plain_atomic() {
+    local target=$1 temp
+    [[ ! -L $target ]] || rw_die 'Символьная ссылка вместо журнала.'
+    temp=$(mktemp "${target}.tmp.XXXXXX")
+    cat > "$temp"; chmod 600 "$temp"; mv -f -- "$temp" "$target"
+}
+rw_write_begin() {
+    local target=$1 temp=${2:-} previous='' next=''
+    [[ ! -f $RW_OUT/.rw-write.json ]] || rw_die 'Незавершённая запись: сначала восстановите журнал.'
+    [[ ! -f $target ]] || previous=$(sha256sum "$target" | cut -d' ' -f1)
+    [[ -z $temp ]] || next=$(sha256sum "$temp" | cut -d' ' -f1)
+    jq -n --arg owner "$RW_OWNER" --arg path "${target#"$RW_OUT/"}" --arg temp "${temp#"$RW_OUT/"}" --arg previous "$previous" --arg next "$next" \
+      '{schema_version:1,owner:$owner,path:$path,temp:$temp,previous:$previous,next:$next}' | rw_plain_atomic "$RW_OUT/.rw-write.json"
+}
+rw_resume_writes() {
+    [[ -f $RW_OUT/.rw-write.json ]] || return 0
+    local path temp previous next current='' target
+    [[ ! -L $RW_OUT/.rw-write.json && $(stat -c %a "$RW_OUT/.rw-write.json") == 600 ]] || rw_die 'Некорректные права журнала записи.'
+    jq -e --arg owner "$RW_OWNER" '.schema_version==1 and .owner==$owner and (.path|type=="string" and test("^[A-Za-z0-9_./-]+$") and startswith("/")==false and contains("..")==false) and (.path!="manifest.json" and .path!=".rw-write.json") and ([.previous,.next]|all(.=="" or test("^[a-f0-9]{64}$")))' "$RW_OUT/.rw-write.json" >/dev/null || rw_die 'Журнал записи не принадлежит установке.'
+    path=$(jq -r '.path' "$RW_OUT/.rw-write.json"); temp=$(jq -r '.temp' "$RW_OUT/.rw-write.json")
+    previous=$(jq -r '.previous' "$RW_OUT/.rw-write.json"); next=$(jq -r '.next' "$RW_OUT/.rw-write.json")
+    target=$RW_OUT/$path; rw_safe_parents "$target"
+    [[ ! -L $target && ( ! -e $target || -f $target ) ]] || rw_die 'Необычный тип файла в незавершённой записи.'
+    [[ ! -f $target ]] || current=$(sha256sum "$target" | cut -d' ' -f1)
+    [[ $current == "$previous" || $current == "$next" ]] || rw_die 'Файл изменён вне установщика во время незавершённой записи.'
+    if [[ -n $next ]]; then
+        [[ $temp == "$path.tmp."* && $temp != *'..'* && $temp != /* ]] || rw_die 'Некорректный временный путь журнала.'
+        rw_safe_parents "$RW_OUT/$temp"
+        if [[ $current != "$next" ]]; then
+            [[ -f $RW_OUT/$temp && ! -L $RW_OUT/$temp && $(sha256sum "$RW_OUT/$temp" | cut -d' ' -f1) == "$next" ]] || rw_die 'Не сохранилось содержимое незавершённой записи.'
+            mv -f -- "$RW_OUT/$temp" "$target"
+        fi
+        jq --arg path "$path" --arg sum "$next" '.managed_files=([.managed_files[]|select(.path!=$path)]+[{path:$path,sha256:$sum}])' "$RW_OUT/manifest.json" | rw_plain_atomic "$RW_OUT/manifest.json"
+        [[ ! -e $RW_OUT/$temp ]] || rm -f -- "$RW_OUT/$temp"
+    else
+        rm -f -- "$target"
+        jq --arg path "$path" '.managed_files|=map(select(.path!=$path))' "$RW_OUT/manifest.json" | rw_plain_atomic "$RW_OUT/manifest.json"
+    fi
+    rm -f -- "$RW_OUT/.rw-write.json"
+}
+rw_managed_remove() { rw_write_begin "$RW_OUT/$1"; rw_resume_writes; }
 rw_jwrite() { local target=$1; shift; jq "$@" | rw_atomic "$target"; }
 rw_lock() {
     [[ ${RW_LOCK_DIR:-} != "$RW_OUT" ]] || return 0
@@ -1139,6 +1179,7 @@ rw_api() {
     [[ -z $body ]] || args+=(--data-binary "@$body")
     code=$(curl "${args[@]}" --output "$target" --write-out '%{http_code}' "$RW_API_ROOT$path") || return 1
     [[ $code =~ ^2[0-9][0-9]$ ]] || return 1
+    [[ $code != 204 ]] || return 0
     jq -e 'type=="object" and has("response")' "$target" >/dev/null
 }
 rw_auth_header() {
@@ -1170,29 +1211,28 @@ rw_panel_login() {
     if [[ ${RW_MUTATING:-0} == 1 ]]; then rw_manifest_set '.admin_bootstrapped=true'; fi
 }
 rw_token() {
-    local key=$1 scopes=$2 body=$RW_TMP/token-request.json response=$RW_TMP/token-response.json uuid
-    if [[ -s $RW_OUT/private/$key.token ]]; then return; fi
-    # A lost create-token response cannot recover the token value. Stop for explicit revocation/rotation.
-    [[ $(jq -r --arg key "$key" '.token_intents[$key] // false' "$RW_OUT/manifest.json") == false ]] || rw_die 'Ранее начат выпуск API-токена без сохранённого ответа; нужна проверка/ротация этого токена.'
-    jq -n --arg name "${key}-${RW_OWNER:0:8}" --slurpfile scopes "$scopes" '{name:$name,expiresInDays:90,scopes:$scopes[0]}' | rw_atomic "$body"
-    rw_manifest_set '.token_intents[$key]=true' --arg key "$key"
-    rw_api POST /api/tokens "$body" "$response" || rw_die 'Выпуск токена не подтверждён; публикация не выполнялась.'
-    jq -er '.response.token' "$response" | rw_atomic "$RW_OUT/private/$key.token"
-    uuid=$(jq -er '.response.uuid' "$response")
-    jq --arg uuid "$uuid" --arg key "$key" '.tokens[$key]={uuid:$uuid,expires_at:(now+90*86400)}' "$RW_OUT/manifest.json" | rw_atomic "$RW_OUT/manifest.json"
+    local key=$1 scopes=$2
+    if [[ -s $RW_OUT/private/$key.token && $(jq -r --arg key "$key" '.tokens[$key].expires_at // 0|floor' "$RW_OUT/manifest.json") -gt $(date +%s) && $(jq -r --arg key "$key" '.token_operations[$key] // null' "$RW_OUT/manifest.json") == null ]]; then return; fi
+    rw_token_replace "$key" "$scopes" bootstrap
 }
-rw_panel_tokens() {
+rw_token_scopes() {
     rw_api GET /api/tokens/scopes '' "$RW_TMP/scopes.json" || rw_die 'Не удалось проверить каталог прав API.'
     jq '[.response.resources[].endpoints[]|select(.kind=="read" and (.path|test("/api/system/metadata$|/api/sub(/|$)|/api/subscriptions?(/|$)|/api/(subscription-page-configs?|subpage-configs?)(/|$)")))|.key]|unique' "$RW_TMP/scopes.json" > "$RW_TMP/subscription-scopes.json"
     jq -e 'length>0 and all(.!="*")' "$RW_TMP/subscription-scopes.json" >/dev/null || rw_die 'Не найдены минимальные права subscription-page; общий токен не выдаётся.'
-    rw_token subscription "$RW_TMP/subscription-scopes.json"
     jq '[.response.resources[].endpoints[]|select((.method|ascii_upcase)=="GET" or (.method|ascii_upcase)=="POST")|select(.path|test("^/api/(nodes|config-profiles|hosts|internal-squads)(/\\{[^/]+\\})?$|^/api/keygen$"))|.key]|unique' "$RW_TMP/scopes.json" > "$RW_TMP/installer-scopes.json"
     jq -e 'length>0 and all(.!="*")' "$RW_TMP/installer-scopes.json" >/dev/null || rw_die 'Не получены права управления нодой.'
-    rw_token installer "$RW_TMP/installer-scopes.json"
+}
+rw_subscription_env() {
     {
         printf 'APP_PORT=3010\nREMNAWAVE_PANEL_URL=http://rw_panel:3000\nTRUST_PROXY=1\nREMNAWAVE_API_TOKEN='
         tr -d '\n' < "$RW_OUT/private/subscription.token"; printf '\n'
     } | rw_atomic "$RW_OUT/private/subscription.env"
+}
+rw_panel_tokens() {
+    rw_token_scopes
+    rw_token subscription "$RW_TMP/subscription-scopes.json"
+    rw_token installer "$RW_TMP/installer-scopes.json"
+    rw_subscription_env
     rw_auth_header "$RW_OUT/private/installer.token"
 }
 rw_api_object() {
@@ -1378,15 +1418,17 @@ rw_existing_caddy_apply() {
     RW_CADDY_ROLLBACK_PENDING=0
 }
 rw_apply() {
-    rw_root; rw_os; rw_resource_checks; rw_dns_checks; rw_docker_install; rw_preflight
+    rw_root; rw_os
     if [[ -f $RW_OUT/manifest.json ]]; then
         [[ -z ${RW_VERSION_FILE:-} ]] || rw_die 'Для смены версий существующей установки используйте upgrade.'
         rw_owned
+        rw_lock; rw_resume_writes
         rw_verify_files; rw_ssh_idle
         [[ $(jq -r '.config_fingerprint' "$RW_OUT/manifest.json") == "$RW_FINGERPRINT" ]] || rw_die 'Параметры изменились; ключи и конфиги не перезаписываются.'
     else
         [[ ! -d $RW_OUT || -z $(find "$RW_OUT" -mindepth 1 -maxdepth 1 -print -quit) ]] || rw_die 'Каталог не пуст и не принадлежит установщику.'
     fi
+    rw_resource_checks; rw_dns_checks; rw_docker_install; rw_preflight
     rw_lock
     RW_MUTATING=1
     if [[ ! -f $RW_OUT/manifest.json ]]; then rw_manifest preparing; fi
@@ -1430,6 +1472,147 @@ rw_apply() {
     if [[ $RW_ROLE != node ]]; then rw_info 'Админские данные: private/admin.json; пароль Caddy Auth: private/secrets.json. Завершите MFA при первом входе.'; fi
 }
 # shellcheck shell=bash
+rw_token_catalog() {
+    rw_api GET /api/tokens '' "$RW_TMP/tokens.json" || rw_die 'Не удалось прочитать каталог токенов; изменения остановлены.'
+    jq -e '.response.tokens|type=="array"' "$RW_TMP/tokens.json" >/dev/null || rw_die 'Неизвестный формат каталога токенов.'
+}
+rw_token_revoke() {
+    local uuid=$1
+    [[ $uuid =~ ^[a-f0-9-]{36}$ ]] || rw_die 'Некорректный UUID токена.'
+    rw_token_catalog
+    if jq -e --arg uuid "$uuid" '.response.tokens|any(.uuid==$uuid)' "$RW_TMP/tokens.json" >/dev/null; then
+        # DELETE may have completed before its response was lost. Confirm absence.
+        rw_api DELETE "/api/tokens/$uuid" '' "$RW_TMP/revoked.json" || true
+        rw_token_catalog
+        ! jq -e --arg uuid "$uuid" '.response.tokens|any(.uuid==$uuid)' "$RW_TMP/tokens.json" >/dev/null || rw_die 'Отзыв токена не подтверждён; повторите tokens rotate.'
+    fi
+}
+rw_token_epoch() { date -u -d "$1" +%s; }
+rw_token_record() {
+    local key=$1 file=$2 epoch
+    epoch=$(rw_token_epoch "$(jq -er '.expireAt' "$file")") || rw_die 'Неизвестный срок действия токена.'
+    jq -e --argjson epoch "$epoch" '.uuid|test("^[a-f0-9-]{36}$")' "$file" >/dev/null || rw_die 'Некорректный UUID токена.'
+    rw_manifest_set '.tokens[$key]=($t[0]|{uuid,name,scopes,expires_at:$epoch})' --arg key "$key" --argjson epoch "$epoch" --slurpfile t "$file"
+}
+rw_token_replace() {
+    local key=$1 scopes=$2 mode=${3:-rotate} name old uuid count next=$RW_OUT/private/$1.next.json epoch namespace
+    [[ $key == installer || $key == subscription ]] || rw_die 'Неизвестное назначение токена.'
+    rw_panel_login
+    rw_token_catalog
+    namespace=$(jq -r '.api_namespace_owner // .ownership_label' "$RW_OUT/manifest.json")
+    if [[ $(jq -r --arg key "$key" '.token_operations[$key].stage // empty' "$RW_OUT/manifest.json") == complete ]]; then
+        rw_managed_remove "private/$key.next.json"
+        rw_managed_remove "private/$key.previous.token"
+        rw_manifest_set 'del(.token_operations[$key],.token_intents[$key])' --arg key "$key"
+        return
+    fi
+    old=$(jq -r --arg key "$key" '.tokens[$key].uuid // empty' "$RW_OUT/manifest.json")
+    # A stored UUID may never refer to another installation's token.
+    if [[ -n $old ]]; then
+        jq --arg uuid "$old" '.response.tokens|map(select(.uuid==$uuid))' "$RW_TMP/tokens.json" > "$RW_TMP/old-token.json"
+        if jq -e 'length>0' "$RW_TMP/old-token.json" >/dev/null; then
+            jq -e --arg key "$key" --arg owner "${namespace:0:8}" --slurpfile m "$RW_OUT/manifest.json" '
+              length==1 and (.[0].name==($m[0].tokens[$key].name // ($key+"-"+$owner)))
+              and (($m[0].tokens[$key].scopes // .[0].scopes)|sort)==(.[0].scopes|sort)' "$RW_TMP/old-token.json" >/dev/null || rw_die 'Владение старым токеном не подтверждено.'
+        fi
+    fi
+    if ! jq -e --arg key "$key" '.token_operations[$key]!=null' "$RW_OUT/manifest.json" >/dev/null; then
+        [[ ! -f $next ]] || rw_die 'Обнаружен пакет токена без журнала; автоматическая замена запрещена.'
+        name="$key-${RW_OWNER:0:8}-$(openssl rand -hex 4)"
+        # Support the old interrupted bootstrap, whose token was never published.
+        if [[ $(jq -r --arg key "$key" '.token_intents[$key] // false' "$RW_OUT/manifest.json") == true && -z $old ]]; then name="$key-${namespace:0:8}"; fi
+        rw_manifest_set '.token_operations[$key]={name:$name,old_uuid:$old,old_record:(.tokens[$key] // null),scopes:$scopes[0],mode:$mode,stage:"creating"}' --arg key "$key" --arg name "$name" --arg old "$old" --arg mode "$mode" --slurpfile scopes "$scopes"
+    fi
+    name=$(jq -r --arg key "$key" '.token_operations[$key].name' "$RW_OUT/manifest.json")
+    old=$(jq -r --arg key "$key" '.token_operations[$key].old_uuid' "$RW_OUT/manifest.json")
+    if [[ -n $old && ! -f $RW_OUT/private/$key.previous.token ]]; then
+        [[ $(jq -r --arg key "$key" '.tokens[$key].uuid' "$RW_OUT/manifest.json") == "$old" && -s $RW_OUT/private/$key.token ]] || rw_die 'Не сохранился прежний токен для отката активации.'
+        cat "$RW_OUT/private/$key.token" | rw_atomic "$RW_OUT/private/$key.previous.token"
+    fi
+    jq -e --arg key "$key" --slurpfile scopes "$scopes" '(.token_operations[$key].scopes|sort)==($scopes[0]|sort)' "$RW_OUT/manifest.json" >/dev/null || rw_die 'Права изменились во время операции; требуется сверка.'
+    if [[ ! -f $next ]]; then
+        jq --arg name "$name" '.response.tokens|map(select(.name==$name))' "$RW_TMP/tokens.json" > "$RW_TMP/token-matches.json"
+        count=$(jq 'length' "$RW_TMP/token-matches.json")
+        (( count<=1 )) || rw_die 'Несколько токенов совпали с журналом; автоматический отзыв запрещён.'
+        if (( count==1 )); then
+            jq -e --slurpfile s "$scopes" '.[0].scopes|sort==($s[0]|sort)' "$RW_TMP/token-matches.json" >/dev/null || rw_die 'Права потерянного токена не совпали с журналом.'
+            uuid=$(jq -r '.[0].uuid' "$RW_TMP/token-matches.json")
+            [[ $uuid != "$old" ]] || rw_die 'Токен замены совпал с действующим.'
+            rw_token_revoke "$uuid"
+        fi
+        jq -n --arg name "$name" --slurpfile s "$scopes" '{name:$name,expiresInDays:90,scopes:$s[0]}' > "$RW_TMP/token-request.json"
+        rw_api POST /api/tokens "$RW_TMP/token-request.json" "$RW_TMP/token-response.json" || rw_die 'Ответ выпуска потерян. Повторите эту команду: журнал позволит отозвать только собственный неопубликованный токен.'
+        jq -e --arg name "$name" --slurpfile s "$scopes" '.response.name==$name and (.response.scopes|sort)==($s[0]|sort) and (.response.token|type=="string" and test("^[A-Za-z0-9._=+/-]+$"))' "$RW_TMP/token-response.json" >/dev/null || rw_die 'Неполный ответ выпуска токена; продолжение остановлено.'
+        jq '.response' "$RW_TMP/token-response.json" | rw_atomic "$next"
+    fi
+    jq -e --arg name "$name" --slurpfile s "$scopes" '.name==$name and (.scopes|sort)==($s[0]|sort) and (.token|test("^[A-Za-z0-9._=+/-]+$"))' "$next" >/dev/null || rw_die 'Пакет замены не соответствует журналу.'
+    epoch=$(rw_token_epoch "$(jq -r '.expireAt' "$next")")
+    (( epoch>$(date +%s) )) || rw_die 'Подготовленный токен истёк; требуется сверка перед новым выпуском.'
+    rw_token_catalog
+    jq -e --slurpfile t "$next" '.response.tokens|any(.uuid==$t[0].uuid and .name==$t[0].name and .expireAt==$t[0].expireAt and (.scopes|sort)==($t[0].scopes|sort))' "$RW_TMP/tokens.json" >/dev/null || rw_die 'Токен замены отсутствует или изменён в панели.'
+    jq -er '.token' "$next" | rw_atomic "$RW_TMP/candidate.token"
+    rw_auth_header "$RW_TMP/candidate.token"
+    if [[ $key == subscription ]]; then
+        rw_api GET /api/system/metadata '' "$RW_TMP/token-probe.json" || rw_die 'Новый токен подписок не прошёл API-проверку; старый не отозван.'
+    else rw_api GET /api/nodes '' "$RW_TMP/token-probe.json" || rw_die 'Новый токен управления не прошёл API-проверку; старый не отозван.'; fi
+    cat "$RW_TMP/candidate.token" | rw_atomic "$RW_OUT/private/$key.token"
+    rw_token_record "$key" "$next"
+    if [[ $key == subscription ]]; then
+        rw_subscription_env
+        if [[ -n $old || $(jq -r --arg key "$key" '.token_operations[$key].mode' "$RW_OUT/manifest.json") != bootstrap ]]; then
+            if ! rw_compose --profile public up -d --wait --wait-timeout 90 rw_subscription || ! rw_compose --profile public exec -T rw_subscription curl -fsS --max-time 10 http://127.0.0.1:3010/internal/health >/dev/null; then
+                rw_token_activation_rollback "$key"
+                rw_die 'Активация подписок не прошла; прежний токен возвращён. Повторите tokens rotate.'
+            fi
+        fi
+    fi
+    rw_panel_login
+    [[ -z $old ]] || rw_token_revoke "$old"
+    rw_manifest_set '.token_operations[$key].stage="complete"' --arg key "$key"
+    rw_managed_remove "private/$key.next.json"
+    rw_managed_remove "private/$key.previous.token"
+    rw_manifest_set 'del(.token_operations[$key],.token_intents[$key])' --arg key "$key"
+    rw_info "Токен $key заменён и проверен; прежний отозван."
+}
+rw_token_activation_rollback() {
+    local key=$1
+    [[ -f $RW_OUT/private/$key.previous.token ]] || return 0
+    cat "$RW_OUT/private/$key.previous.token" | rw_atomic "$RW_OUT/private/$key.token"
+    rw_manifest_set '.tokens[$key]=.token_operations[$key].old_record' --arg key "$key"
+    rw_subscription_env
+    rw_compose --profile public up -d --wait --wait-timeout 90 rw_subscription || rw_info 'Прежний токен восстановлен в файлах, но сервис требует диагностики.'
+}
+rw_tokens_status() {
+    local key uuid expiry remaining bad=0
+    rw_panel_login; rw_token_catalog
+    for key in installer subscription; do
+        uuid=$(jq -r --arg key "$key" '.tokens[$key].uuid // empty' "$RW_OUT/manifest.json")
+        expiry=$(jq -r --arg uuid "$uuid" '.response.tokens[]|select(.uuid==$uuid)|.expireAt' "$RW_TMP/tokens.json")
+        if [[ -z $uuid || -z $expiry || ! -s $RW_OUT/private/$key.token ]]; then
+            rw_info "Токен $key отсутствует: выполните rwctl tokens rotate --token $key."; bad=1; continue
+        fi
+        remaining=$(( $(rw_token_epoch "$expiry")-$(date +%s) ))
+        jq -n --arg purpose "$key" --arg expire_at "$expiry" --argjson remaining "$remaining" '{purpose:$purpose,expire_at:$expire_at,remaining_seconds:$remaining,rotation_due:($remaining<604800)}'
+        if (( remaining<604800 )); then rw_info "Токен $key истекает или истёк: rwctl tokens rotate --token $key."; fi
+        (( remaining>0 )) || bad=1
+    done
+    return "$bad"
+}
+rw_tokens_rotate() {
+    rw_root; rw_owned; rw_lock; rw_resume_writes; rw_verify_files; rw_ssh_idle
+    [[ $RW_ROLE != node ]] || rw_die 'У отдельной ноды нет токенов панели.'
+    [[ ${RW_TOKEN_PURPOSE:-all} == all || $RW_TOKEN_PURPOSE == installer || $RW_TOKEN_PURPOSE == subscription ]] || rw_die '--token: all, installer или subscription.'
+    if (( RW_DRY_RUN )); then rw_tokens_status; return; fi
+    RW_MUTATING=1
+    rw_panel_login; rw_token_scopes
+    local key
+    for key in subscription installer; do
+        [[ ${RW_TOKEN_PURPOSE:-all} == all || $RW_TOKEN_PURPOSE == "$key" ]] || continue
+        rw_token_replace "$key" "$RW_TMP/$key-scopes.json"
+    done
+    rw_track_files
+}
+# shellcheck shell=bash
 rw_track_files() {
     local file relative sum
     : > "$RW_TMP/managed.jsonl"
@@ -1454,6 +1637,8 @@ rw_verify_files() {
 }
 rw_doctor() {
     local id state service node_uuid attempts
+    : > "$RW_TMP/doctor-tokens.jsonl"
+    printf 'null\n' > "$RW_TMP/doctor-mfa.json"
     rw_owned; rw_docker_ownership
     [[ $(jq -r '.status' "$RW_OUT/manifest.json") != node-prepared-awaiting-attachment ]] || rw_die 'Нода подготовлена, но ещё не подключена к панели.'
     while IFS= read -r service; do
@@ -1474,6 +1659,8 @@ rw_doctor() {
     done < <(docker ps -aq --filter "label=io.pdm.remnawave.installation=$RW_OWNER")
     if [[ $RW_ROLE != node ]]; then
         rw_wait_panel; rw_panel_login
+        rw_tokens_status > "$RW_TMP/doctor-tokens.jsonl" || rw_die 'Токены панели требуют восстановления: rwctl tokens rotate.'
+        rw_mfa_status > "$RW_TMP/doctor-mfa.json"
         while IFS= read -r node_uuid; do
             for ((attempts=0; attempts<30; attempts++)); do
                 rw_api GET "/api/nodes/$node_uuid" '' "$RW_TMP/node-health.json" && jq -e '.response.isConnected==true and .response.isDisabled==false and .response.xrayUptime>0' "$RW_TMP/node-health.json" >/dev/null && break
@@ -1482,7 +1669,7 @@ rw_doctor() {
             jq -e '.response.isConnected==true and .response.isDisabled==false and .response.xrayUptime>0' "$RW_TMP/node-health.json" >/dev/null || rw_die 'Панель не подтвердила подключение ноды и работающий Xray.'
         done < <(jq -r '.nodes[].node_uuid' "$RW_OUT/inventory.json")
     fi
-    jq -n --arg e "$RW_ENV" --arg role "$RW_ROLE" '{schema_version:1,environment_id:$e,role:$role,containers_running:true,client_acceptance_required:true}'
+    jq -n --arg e "$RW_ENV" --arg role "$RW_ROLE" --slurpfile tokens "$RW_TMP/doctor-tokens.jsonl" --slurpfile mfa "$RW_TMP/doctor-mfa.json" '{schema_version:1,environment_id:$e,role:$role,containers_running:true,client_acceptance_required:true,tokens:$tokens,mfa:$mfa[0]}'
 }
 rw_resource_plan() {
     local kind=$1 command=$2 expression=$3 id owner
@@ -1708,13 +1895,16 @@ rw_restore_files() {
         jq -e --arg sha "$RW_BACKUP_SHA" '.status=="restoring" and .restore_archive_sha256==$sha' "$RW_OUT/manifest.json" >/dev/null || rw_die 'Restore предназначен для пустой установки; существующую систему не перезаписываем.'
     else [[ ! -d $RW_OUT || -z $(find "$RW_OUT" -mindepth 1 -maxdepth 1 -print -quit) ]] || rw_die 'Каталог восстановления не пуст.'; fi
     rw_lock; RW_MUTATING=1
+    if [[ ! -f $RW_OUT/manifest.json ]]; then
+        jq --arg owner "$RW_OWNER" --arg fp "$RW_FINGERPRINT" --arg sha "$RW_BACKUP_SHA" \
+          '.api_namespace_owner //= .ownership_label | .ownership_label=$owner | .config_fingerprint=$fp | .status="restoring" | .restore_archive_sha256=$sha | .firewall_installed=false | .ufw_rules_added=false | .existing_caddy_updated=false | .managed_files=[] | del(.ssh)' "$source/manifest.json" | rw_atomic "$RW_OUT/manifest.json"
+    fi
+    rw_resume_writes
     while IFS= read -r path; do
         [[ $path != rwctl && $path != compose.json && $path != config.json && $path != private/.managed-paths && $path != private/ssh-* && $path != plugins/stats/* && $path != private/stats.env && $path != private/stats.token ]] || continue
         cat "$source/$path" | rw_atomic "$RW_OUT/$path"
     done < <(jq -r '.managed_files[].path' "$source/manifest.json")
     # Never execute archived shell code or trust an archived Compose with host mounts.
-    jq --arg owner "$RW_OWNER" --arg fp "$RW_FINGERPRINT" --arg sha "$RW_BACKUP_SHA" \
-      '.api_namespace_owner //= .ownership_label | .ownership_label=$owner | .config_fingerprint=$fp | .status="restoring" | .restore_archive_sha256=$sha | .firewall_installed=false | .ufw_rules_added=false | .existing_caddy_updated=false | .managed_files=[] | del(.ssh)' "$source/manifest.json" | rw_atomic "$RW_OUT/manifest.json"
     cat "$RW_CFG" | rw_atomic "$RW_OUT/config.json"
     if [[ $RW_ROLE != node ]]; then
         local token=$source/private/subscription.token
@@ -2253,14 +2443,38 @@ rw_tls_test() {
     cat "$RW_OUT/private/tls-test.json"
 }
 # shellcheck shell=bash
+rw_mfa_status() {
+    rw_owned
+    [[ $RW_ROLE != node ]] || rw_die 'У отдельной ноды нет административного входа MFA.'
+    local user
+    user=$(rw_cfg '.admin.username')
+    rw_compose --profile public exec -T rw_caddy cat /data/.local/caddy/users.json > "$RW_TMP/mfa-users.json" || rw_die 'Хранилище Caddy Auth недоступно.'
+    jq -e --arg user "$user" '[.users[]|select(.username==$user)]|length==1' "$RW_TMP/mfa-users.json" >/dev/null || rw_die 'Не найдена единственная учётная запись владельца Caddy Auth.'
+    rw_mfa_summary "$user" "$RW_TMP/mfa-users.json"
+}
+rw_mfa_summary() {
+    jq --arg user "$1" '.users[]|select(.username==$user)|([.mfa_tokens[]?|select(.type=="totp" and .disabled!=true and .expired!=true)]) as $tokens | {username,authenticator_enrolled:($tokens|length>0),owner_action_required:($tokens|length==0)}' "$2"
+}
+rw_mfa_guide() {
+    rw_owned
+    [[ $RW_ROLE != node ]] || rw_die 'У отдельной ноды нет административного входа MFA.'
+    printf 'Административный вход: https://%s:%s/r\n' "$(rw_cfg '.domains.panel')" "$(rw_port https)"
+    printf 'Логин: %s. Пароль Caddy Auth: поле auth_password в private/secrets.json.\n' "$(rw_cfg '.admin.username')"
+    printf '%s\n' 'После ввода пароля выберите добавление приложения MFA, сканируйте QR своим аутентификатором и подтвердите текущий код.' \
+      'Затем выйдите и проверьте новый вход в отдельном окне браузера: пароль и код обязательны.' \
+      'Пароль Remnawave хранится отдельно в private/admin.json. Не передавайте QR, секрет или резервную копию в чат.' \
+      'Сохраните закрытый backup вне VPS: он содержит привязку MFA. Для восстановления используйте rwctl restore; отключение MFA не требуется.'
+}
+# shellcheck shell=bash
 rw_interactive() {
-    local role=${RW_ROLE_ARG:-} env mode panel='' sub='' node='' ips sources='' user='' email=''
+    local role=${RW_ROLE_ARG:-} env mode panel='' sub='' node='' ips sources='' user='' email='' file='' container='' health='' profile=standard purpose
     if [[ -z $role ]]; then
         printf '\nRemnawave: 1) панель  2) отдельная нода  3) панель и нода\n' >&2
         read -r -p 'Режим [3]: ' role; case ${role:-3} in 1) role=panel;; 2) role=node;; 3) role='panel-node';; *) rw_die 'Неверный режим.';; esac
     fi
     read -r -p 'ID окружения (например fi-test): ' env
     read -r -p 'Режим сети clean / fi-parallel [clean]: ' mode; mode=${mode:-clean}
+    [[ $mode != fi-parallel || $role == panel-node ]] || rw_die 'Параллельный режим требует панель и ноду.'
     if [[ $role != node ]]; then
         read -r -p 'Домен панели: ' panel
         read -r -p "Домен подписок [$panel]: " sub; sub=${sub:-$panel}
@@ -2271,10 +2485,19 @@ rw_interactive() {
     fi
     read -r -p 'Публичные IPv4/IPv6 через запятую: ' ips
     [[ $role != node ]] || read -r -p 'IP панели для управления через запятую: ' sources
+    if [[ $mode == fi-parallel ]]; then
+        read -r -p 'Путь к Caddyfile действующего Caddy: ' file
+        read -r -p 'Имя действующего контейнера Caddy [caddy]: ' container; container=${container:-caddy}
+        read -r -p 'HTTPS URL проверки действующего сайта: ' health
+        read -r -p 'Профиль ресурсов standard / compact-test [compact-test]: ' profile; profile=${profile:-compact-test}
+        purpose='test'
+    else
+        read -r -p 'Назначение test / production [production]: ' purpose; purpose=${purpose:-production}
+    fi
     jq -n --arg role "$role" --arg env "$env" --arg mode "$mode" --arg panel "$panel" --arg sub "$sub" --arg node "$node" --arg ips "$ips" --arg sources "$sources" --arg user "$user" --arg email "$email" \
-      '{schema_version:1,environment_id:$env,role:$role,network_mode:$mode,domains:({panel:$panel,subscription:$sub,node:$node}|with_entries(select(.value!=""))),public_addresses:($ips|split(",")|map(gsub("^ +| +$";""))),panel_addresses:($sources|split(",")|map(select(length>0)|gsub("^ +| +$";""))),admin:{username:$user,email:$email}}' > "$RW_TMP/interactive.json"
+      --arg file "$file" --arg container "$container" --arg health "$health" --arg profile "$profile" --arg purpose "$purpose" \
+      '{schema_version:1,environment_id:$env,role:$role,network_mode:$mode,domains:({panel:$panel,subscription:$sub,node:$node}|with_entries(select(.value!=""))),public_addresses:($ips|split(",")|map(gsub("^ +| +$";""))),panel_addresses:($sources|split(",")|map(select(length>0)|gsub("^ +| +$";""))),admin:{username:$user,email:$email},resources:{profile:$profile,purpose:$purpose}} | if $mode=="fi-parallel" then .existing_caddy={config_file:$file,container:$container,health_url:$health} else . end' > "$RW_TMP/interactive.json"
     RW_CONFIG=$RW_TMP/interactive.json
-    if [[ $mode == fi-parallel ]]; then rw_die 'Для параллельного FI нужен config файл с existing_caddy; используйте пример installer/examples/fi-parallel.json.'; fi
 }
 rw_help() {
     cat <<'RW_HELP'
@@ -2292,6 +2515,9 @@ Remnawave — Linux/Bash/Docker Compose. На VPS Python не нужен.
   rwctl tls-test [--test-http-port 18082] [--test-https-port 19447] [--dry-run]
   rwctl stats install [--stats-port 13100] [--archive BACKUP_FILE] [--dry-run]
   rwctl stats status
+  rwctl tokens status
+  rwctl tokens rotate [--token all|subscription|installer] [--dry-run]
+  rwctl mfa status|guide
   rwctl node attach --config PANEL_FILE --output PANEL_DIR --ssh USER@HOST --node-config NODE_FILE
 Удаление:
   uninstall.sh --output DIR [--dry-run] [--purge] [--yes]
@@ -2307,7 +2533,7 @@ rw_plan() {
 rw_main() {
     local entry=$1 command
     shift; rw_linux
-    RW_CONFIG=; RW_OUT=; RW_CONNECTION=; RW_DRY_RUN=0; RW_YES=0; RW_PURGE=0; RW_PREPARED_ONLY=0; RW_ROLE_ARG=; RW_ARCHIVE=; RW_SSH=; RW_NODE_CONFIG=; RW_VERSION_FILE=; RW_SSH_ADMIN=; RW_SSH_PUBLIC_KEY=; RW_SSH_NONCE=; RW_TLS_HTTP=; RW_TLS_HTTPS=; RW_STATS_PORT=; RW_STATS_SOURCE_MANIFEST=
+    RW_CONFIG=; RW_OUT=; RW_CONNECTION=; RW_DRY_RUN=0; RW_YES=0; RW_PURGE=0; RW_PREPARED_ONLY=0; RW_ROLE_ARG=; RW_ARCHIVE=; RW_SSH=; RW_NODE_CONFIG=; RW_VERSION_FILE=; RW_SSH_ADMIN=; RW_SSH_PUBLIC_KEY=; RW_SSH_NONCE=; RW_TLS_HTTP=; RW_TLS_HTTPS=; RW_STATS_PORT=; RW_STATS_SOURCE_MANIFEST=; RW_TOKEN_PURPOSE=all
     if [[ $entry == ctl ]]; then
         command=${1:-help}; (( $#==0 )) || shift
         [[ $command != --help && $command != -h ]] || command=help
@@ -2326,6 +2552,14 @@ rw_main() {
         case ${1:-} in install|status) command=stats-$1;; *) rw_die 'stats: install или status.';; esac
         shift
     fi
+    if [[ $command == tokens ]]; then
+        case ${1:-} in status|rotate) command=tokens-$1;; *) rw_die 'tokens: status или rotate.';; esac
+        shift
+    fi
+    if [[ $command == mfa ]]; then
+        case ${1:-} in status|guide) command=mfa-$1;; *) rw_die 'mfa: status или guide.';; esac
+        shift
+    fi
     while (( $# )); do
         case $1 in
           --help|-h) rw_help; return;;
@@ -2341,6 +2575,7 @@ rw_main() {
           --test-http-port) [[ $# -ge 2 ]] || rw_die 'Нужен PORT.'; RW_TLS_HTTP=$2; shift;;
           --test-https-port) [[ $# -ge 2 ]] || rw_die 'Нужен PORT.'; RW_TLS_HTTPS=$2; shift;;
           --stats-port) [[ $# -ge 2 ]] || rw_die 'Нужен PORT.'; RW_STATS_PORT=$2; shift;;
+          --token) [[ $# -ge 2 ]] || rw_die 'Нужно назначение токена.'; RW_TOKEN_PURPOSE=$2; shift;;
           --ssh) [[ $# -ge 2 ]] || rw_die 'Нужен HOST.'; RW_SSH=$2; shift;;
           --node-config) [[ $# -ge 2 ]] || rw_die 'Нужен FILE.'; RW_NODE_CONFIG=$2; shift;;
           --dry-run) RW_DRY_RUN=1;; --yes) RW_YES=1;; --purge) RW_PURGE=1;; --prepared-only) RW_PREPARED_ONLY=1;;
@@ -2384,6 +2619,10 @@ rw_main() {
       tls-test) rw_tls_test;;
       stats-install) rw_stats_install;;
       stats-status) rw_stats_status;;
+      tokens-status) rw_owned; rw_tokens_status;;
+      tokens-rotate) rw_tokens_rotate;;
+      mfa-status) rw_mfa_status;;
+      mfa-guide) rw_mfa_guide;;
       uninstall) rw_uninstall;;
       *) rw_die "Неизвестная команда $command.";;
     esac
