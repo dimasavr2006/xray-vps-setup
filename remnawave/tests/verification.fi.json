@@ -191,8 +191,8 @@
     "48h observation"
   ],
   "github_published": true,
-  "github_commit": "release-being-updated",
-  "published_raw_process_substitution_and_uninstall": "pass",
+  "github_commit": "4f035e9b6f137f89325aea0e94e3de70a90970bd",
+  "published_raw_process_substitution_and_uninstall": "pass: current release files byte-match canonical LF source",
   "observation_heartbeat_id": "remnawave-fi",
   "observation": {
     "started_at_utc": "2026-10-08T23:26:05Z",
