@@ -199,7 +199,7 @@
     "external IPv6 on a host with global IPv6 (FI has no global IPv6; network namespace tests passed)"
   ],
   "github_published": true,
-  "published_raw_process_substitution_and_uninstall": "Prior English release passed; summary release raw verification follows publication.",
+  "published_raw_process_substitution_and_uninstall": "pass: current summary release files byte-match canonical source; standalone wget preview and owned uninstall passed",
   "observation_heartbeat_id": "remnawave-fi",
   "observation": {
     "started_at_utc": "2026-10-08T23:26:05Z",
@@ -225,5 +225,6 @@
     "panel_heap_mib": 160
   },
   "prior_github_commit": "8df96cfb53cbe85c86ce2e12ed1760bd2213d124",
-  "current_release": "English installer with terminal and private access card, read-only info, IP confirmation, Confluence and component updates"
+  "current_release": "English installer with terminal and private access card, read-only info, IP confirmation, Confluence and component updates",
+  "github_commit": "77b0622843cfe8d49fb244aa12fc09fb3821bb83"
 }
