@@ -1269,6 +1269,78 @@ rw_site_set() {
     rw_info 'Cover page updated. Domains, Reality keys and transports were preserved.'
 }
 # shellcheck shell=bash
+rw_summary_url() {
+    local domain=$1 port=$2 path=${3:-}
+    printf 'https://%s' "$domain"
+    [[ $port == 443 ]] || printf ':%s' "$port"
+    printf '%s' "$path"
+}
+rw_summary_render() {
+    local show_secrets=${1:-0} status domain panel_url sub_url cover_url prepared=0 host
+    status=$(jq -r '.status' "$RW_OUT/manifest.json")
+    [[ $status != node-prepared-awaiting-attachment ]] || prepared=1
+    printf '\n=== Remnawave installation summary ===\n'
+    printf 'Installation: %s\nRole: %s\nStatus: %s\nDirectory: %s\n' "$RW_ENV" "$RW_ROLE" "$status" "$RW_OUT"
+    if [[ $RW_ROLE != node ]]; then
+        panel_url=$(rw_summary_url "$(rw_cfg '.domains.panel')" "$(rw_port https)")
+        sub_url=$(rw_summary_url "$(rw_cfg '.domains.subscription')" "$(rw_subscription_port)")
+        printf '\nPanel URL: %s/\nMFA login URL: %s/r\nSubscription base URL: %s/\n' "$panel_url" "$panel_url" "$sub_url"
+        printf 'Remnawave username: %s\nCaddy Auth username: %s\n' "$(jq -r '.username' "$RW_OUT/private/admin.json")" "$(rw_cfg '.admin.username')"
+        if (( show_secrets )); then
+            printf 'Saved Remnawave password: %s\nSaved Caddy Auth password: %s\n' "$(jq -r '.password' "$RW_OUT/private/admin.json")" "$(jq -r '.auth_password' "$RW_OUT/private/secrets.json")"
+        else
+            printf 'Passwords are hidden in this summary. To display them in your terminal:\n  bash %q info --show-secrets\n' "$RW_OUT/rwctl"
+        fi
+        printf 'Credentials: %s/private/admin.json and %s/private/secrets.json\n' "$RW_OUT" "$RW_OUT"
+        printf 'Enroll MFA at the login URL, then verify a fresh browser login.\n'
+        printf 'Personal subscription links are issued per user in the panel.\n'
+    fi
+    if [[ $RW_ROLE != panel ]]; then
+        domain=$(rw_cfg '.domains.node')
+        cover_url=$(rw_summary_url "$domain" "$(rw_port reality)")
+        printf '\nNode domain / SNI: %s\n' "$domain"
+        if (( prepared )); then
+            printf 'Node is prepared; management, cover and transports start after attachment.\nPlanned cover URL: %s/\n' "$cover_url"
+        else printf 'Cover URL: %s/\n' "$cover_url"; fi
+        printf 'VLESS TCP Reality: %s:%s\nVLESS XHTTP Reality: %s:%s\n' "$domain" "$(rw_port reality)" "$domain" "$(rw_port xhttp)"
+        printf 'Reality public key: %s\nReality Short ID: %s\nXHTTP path: %s\nClient fingerprint: chrome\n' \
+            "$(jq -r '.reality_public' "$RW_OUT/private/secrets.json")" "$(jq -r '.short_id' "$RW_OUT/private/secrets.json")" "$(jq -r '.xhttp_path' "$RW_OUT/private/secrets.json")"
+        printf 'Node management port: TCP %s (panel -> node)\n' "$(rw_port node_api)"
+        if [[ $RW_ROLE == node ]]; then
+            printf 'Management address: %s\nAllowed panel source IPs: %s\n' "$(rw_cfg '.management_address')" "$(jq -r '.panel_addresses|join(", ")' "$RW_CFG")"
+        else printf 'Management is restricted to this installation\x27s panel container and loopback.\n'; fi
+        printf 'Native management key file: %s/private/node.env\n' "$RW_OUT"
+        if (( prepared )); then
+            host=$(rw_cfg '.management_address')
+            # scp requires brackets around an IPv6 address; ssh uses USER@ADDRESS.
+            [[ $host != *:* ]] || host=[$host]
+            printf '\nOn the panel server, copy this public node configuration:\n  scp %q %q\n' "root@$host:$RW_OUT/config.json" "/root/$RW_ENV.json"
+            printf 'Then attach from the panel server (replace PANEL_INSTALLATION):\n  bash /opt/pdm-remnawave/PANEL_INSTALLATION/rwctl node attach --ssh %q --node-config %q\n' "root@$(rw_cfg '.management_address')" "/root/$RW_ENV.json"
+            printf 'SSH must already trust this host and permit key-based login; a sudo admin may replace root.\n'
+        fi
+    fi
+    printf '\nConfiguration: %s/config.json\nInventory: %s/inventory.json\n' "$RW_OUT" "$RW_OUT"
+    if [[ -f $RW_OUT/private/install-info.txt ]]; then printf 'Full access card (root-only): %s/private/install-info.txt\n' "$RW_OUT"; fi
+    printf 'Show this summary: bash %q info\n' "$RW_OUT/rwctl"
+    if (( ! prepared )); then printf 'Health check: bash %q doctor\n' "$RW_OUT/rwctl"; fi
+    printf 'Backup: bash %q backup --archive %q\n' "$RW_OUT/rwctl" "/var/backups/pdm-remnawave/$RW_ENV-manual.tgz"
+    printf 'Keep a private backup off the VPS.\n'
+}
+rw_install_summary() {
+    rw_summary_render 1 | rw_atomic "$RW_OUT/private/install-info.txt"
+    # A normal SSH installation shows the owner credentials. CI and redirected
+    # logs receive public connection details and credential file paths only.
+    if [[ -t 1 ]]; then rw_summary_render 1; else rw_summary_render 0; fi
+}
+rw_show_summary() {
+    rw_owned; rw_verify_files
+    if (( ${RW_SHOW_SECRETS:-0} )); then
+        rw_root
+        [[ -t 1 ]] || rw_die '--show-secrets requires an interactive terminal.'
+    fi
+    rw_summary_render "${RW_SHOW_SECRETS:-0}"
+}
+# shellcheck shell=bash
 rw_secrets() {
     local file=$RW_OUT/private/secrets.json key
     if [[ -f $file ]]; then jq -e '.app_secret and .admin_password and .reality_private' "$file" >/dev/null || rw_die 'The secrets file is damaged; keys will not be regenerated.'; return; fi
@@ -1808,6 +1880,7 @@ rw_apply() {
         elif ! grep -q '^SECRET_KEY=' "$RW_OUT/private/node.env"; then
             rw_manifest_set '.status="node-prepared-awaiting-attachment"'
             rw_info "Node prepared in $RW_OUT. Run rwctl node attach on the panel server; SECRET_KEY is not generated locally."
+            rw_install_summary
             return
         fi
     fi
@@ -1819,7 +1892,7 @@ rw_apply() {
     rw_manifest_set '.status="running-awaiting-acceptance"'
     rw_doctor
     rw_info "Containers started in $RW_OUT."
-    if [[ $RW_ROLE != node ]]; then rw_info 'Panel credentials: private/admin.json; Caddy Auth password: private/secrets.json. Enroll MFA on first login.'; fi
+    rw_install_summary
 }
 # shellcheck shell=bash
 rw_token_catalog() {
@@ -2320,6 +2393,7 @@ rw_restore() {
     rw_firewall; rw_existing_caddy_apply
     rw_start_existing
     rw_manifest_set '.status="running-awaiting-acceptance"|.restored_at_utc=(now|strftime("%Y-%m-%dT%H:%M:%SZ"))'
+    rw_install_summary
     rw_track_files
     rw_info 'Restore complete: keys, API IDs, database, MFA and certificates preserved.'
 }
@@ -2899,6 +2973,7 @@ Installation:
   rw-setup.sh [--role panel|node|panel-node] [--config FILE] [--output DIR] [--versions FILE]
   rw-setup.sh --config FILE --dry-run
 Maintenance:
+  rwctl info [--show-secrets]
   rwctl plan|preflight|apply|doctor|backup --config FILE --output DIR
   rwctl restore --archive FILE [--config FILE] [--output DIR] [--dry-run]
   rwctl upgrade [--component all|panel|node|caddy|subscription] [--versions FILE] [--archive BACKUP_FILE] [--dry-run]
@@ -2927,7 +3002,7 @@ rw_plan() {
 rw_main() {
     local entry=$1 command
     shift; rw_linux
-    RW_CONFIG=; RW_OUT=; RW_CONNECTION=; RW_DRY_RUN=0; RW_YES=0; RW_PURGE=0; RW_PREPARED_ONLY=0; RW_ROLE_ARG=; RW_ARCHIVE=; RW_SSH=; RW_NODE_CONFIG=; RW_VERSION_FILE=; RW_SSH_ADMIN=; RW_SSH_PUBLIC_KEY=; RW_SSH_NONCE=; RW_TLS_HTTP=; RW_TLS_HTTPS=; RW_STATS_PORT=; RW_STATS_SOURCE_MANIFEST=; RW_TOKEN_PURPOSE=all; RW_COMPONENT=all; RW_SITE_TEMPLATE=; RW_SITE_FILE=
+    RW_CONFIG=; RW_OUT=; RW_CONNECTION=; RW_DRY_RUN=0; RW_YES=0; RW_PURGE=0; RW_PREPARED_ONLY=0; RW_ROLE_ARG=; RW_ARCHIVE=; RW_SSH=; RW_NODE_CONFIG=; RW_VERSION_FILE=; RW_SSH_ADMIN=; RW_SSH_PUBLIC_KEY=; RW_SSH_NONCE=; RW_TLS_HTTP=; RW_TLS_HTTPS=; RW_STATS_PORT=; RW_STATS_SOURCE_MANIFEST=; RW_TOKEN_PURPOSE=all; RW_COMPONENT=all; RW_SITE_TEMPLATE=; RW_SITE_FILE=; RW_SHOW_SECRETS=0
     if [[ $entry == ctl ]]; then
         command=${1:-help}; (( $#==0 )) || shift
         [[ $command != --help && $command != -h ]] || command=help
@@ -2980,10 +3055,12 @@ rw_main() {
           --ssh) [[ $# -ge 2 ]] || rw_die 'HOST is required.'; RW_SSH=$2; shift;;
           --node-config) [[ $# -ge 2 ]] || rw_die 'FILE is required.'; RW_NODE_CONFIG=$2; shift;;
           --dry-run) RW_DRY_RUN=1;; --yes) RW_YES=1;; --purge) RW_PURGE=1;; --prepared-only) RW_PREPARED_ONLY=1;;
+          --show-secrets) RW_SHOW_SECRETS=1;;
           *) rw_die "Unknown option: $1.";;
         esac; shift
     done
     [[ $command != help ]] || { rw_help; return; }
+    [[ $RW_SHOW_SECRETS == 0 || $command == info ]] || rw_die '--show-secrets is supported by info only.'
     rw_init_tmp
     if [[ ( $command == setup || $command == restore ) && $RW_DRY_RUN == 0 ]]; then rw_root; rw_os; rw_deps; else rw_need jq; fi
     if [[ $command == restore ]]; then rw_restore; return; fi
@@ -3006,6 +3083,7 @@ rw_main() {
       setup|apply) if (( RW_DRY_RUN )); then rw_plan; else rw_deps; rw_apply; rw_track_files; fi;;
       preflight) rw_preflight;;
       doctor) rw_doctor;;
+      info) rw_show_summary;;
       backup) rw_backup;;
       upgrade) rw_upgrade;;
       rollback) rw_rollback;;

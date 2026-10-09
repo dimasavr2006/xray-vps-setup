@@ -48,6 +48,7 @@ Installation:
   rw-setup.sh [--role panel|node|panel-node] [--config FILE] [--output DIR] [--versions FILE]
   rw-setup.sh --config FILE --dry-run
 Maintenance:
+  rwctl info [--show-secrets]
   rwctl plan|preflight|apply|doctor|backup --config FILE --output DIR
   rwctl restore --archive FILE [--config FILE] [--output DIR] [--dry-run]
   rwctl upgrade [--component all|panel|node|caddy|subscription] [--versions FILE] [--archive BACKUP_FILE] [--dry-run]
@@ -76,7 +77,7 @@ rw_plan() {
 rw_main() {
     local entry=$1 command
     shift; rw_linux
-    RW_CONFIG=; RW_OUT=; RW_CONNECTION=; RW_DRY_RUN=0; RW_YES=0; RW_PURGE=0; RW_PREPARED_ONLY=0; RW_ROLE_ARG=; RW_ARCHIVE=; RW_SSH=; RW_NODE_CONFIG=; RW_VERSION_FILE=; RW_SSH_ADMIN=; RW_SSH_PUBLIC_KEY=; RW_SSH_NONCE=; RW_TLS_HTTP=; RW_TLS_HTTPS=; RW_STATS_PORT=; RW_STATS_SOURCE_MANIFEST=; RW_TOKEN_PURPOSE=all; RW_COMPONENT=all; RW_SITE_TEMPLATE=; RW_SITE_FILE=
+    RW_CONFIG=; RW_OUT=; RW_CONNECTION=; RW_DRY_RUN=0; RW_YES=0; RW_PURGE=0; RW_PREPARED_ONLY=0; RW_ROLE_ARG=; RW_ARCHIVE=; RW_SSH=; RW_NODE_CONFIG=; RW_VERSION_FILE=; RW_SSH_ADMIN=; RW_SSH_PUBLIC_KEY=; RW_SSH_NONCE=; RW_TLS_HTTP=; RW_TLS_HTTPS=; RW_STATS_PORT=; RW_STATS_SOURCE_MANIFEST=; RW_TOKEN_PURPOSE=all; RW_COMPONENT=all; RW_SITE_TEMPLATE=; RW_SITE_FILE=; RW_SHOW_SECRETS=0
     if [[ $entry == ctl ]]; then
         command=${1:-help}; (( $#==0 )) || shift
         [[ $command != --help && $command != -h ]] || command=help
@@ -129,10 +130,12 @@ rw_main() {
           --ssh) [[ $# -ge 2 ]] || rw_die 'HOST is required.'; RW_SSH=$2; shift;;
           --node-config) [[ $# -ge 2 ]] || rw_die 'FILE is required.'; RW_NODE_CONFIG=$2; shift;;
           --dry-run) RW_DRY_RUN=1;; --yes) RW_YES=1;; --purge) RW_PURGE=1;; --prepared-only) RW_PREPARED_ONLY=1;;
+          --show-secrets) RW_SHOW_SECRETS=1;;
           *) rw_die "Unknown option: $1.";;
         esac; shift
     done
     [[ $command != help ]] || { rw_help; return; }
+    [[ $RW_SHOW_SECRETS == 0 || $command == info ]] || rw_die '--show-secrets is supported by info only.'
     rw_init_tmp
     if [[ ( $command == setup || $command == restore ) && $RW_DRY_RUN == 0 ]]; then rw_root; rw_os; rw_deps; else rw_need jq; fi
     if [[ $command == restore ]]; then rw_restore; return; fi
@@ -155,6 +158,7 @@ rw_main() {
       setup|apply) if (( RW_DRY_RUN )); then rw_plan; else rw_deps; rw_apply; rw_track_files; fi;;
       preflight) rw_preflight;;
       doctor) rw_doctor;;
+      info) rw_show_summary;;
       backup) rw_backup;;
       upgrade) rw_upgrade;;
       rollback) rw_rollback;;

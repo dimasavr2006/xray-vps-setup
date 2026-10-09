@@ -70,6 +70,22 @@ is in `private/secrets.json`. Visit the panel's `/r` route to enroll MFA, then
 verify a fresh login. Caddy authentication and Remnawave authentication are
 separate. Secret files are root-only and are not printed by status commands.
 
+At the end, an English summary shows the panel/MFA/subscription/cover URLs,
+usernames, actual node ports, Reality public key, Short ID, XHTTP path and
+maintenance commands. A normal SSH terminal also shows the two saved login
+passwords. Redirected output hides passwords. The full card is saved as
+`private/install-info.txt` with mode 0600. Display it again with:
+
+```bash
+bash /opt/pdm-remnawave/vpn-main/rwctl info
+bash /opt/pdm-remnawave/vpn-main/rwctl info --show-secrets
+```
+
+`info` is read-only and hides passwords by default. `--show-secrets` requires
+root and a terminal. The card excludes database passwords, API tokens, native
+management keys and the private Reality key. A prepared standalone node shows
+planned endpoints and copy/attachment commands, not a running-service claim.
+
 Production panel admission requires at least 2 CPU, 4 GiB RAM and 20 GiB free
 disk. Standalone node admission starts at 1 CPU and 1 GiB RAM, with a separate
 disk budget. Compact tests enforce container limits and host headroom; they
@@ -117,12 +133,24 @@ prepared configuration, registers the node/profile through the panel API and
 sends a short-lived connection package over SSH. It does not send the panel
 API token to the node or fabricate `SECRET_KEY` locally.
 
+The panel connects to the node's **TCP 2222** management API by default
+(`ports.node_api` / `NODE_PORT`). This is an inbound port on the node, restricted
+to the confirmed panel source IPs. The panel does not need a new inbound port
+for node management. SSH (normally TCP 22, or the host's SSH configuration)
+is used to verify and provision the prepared node. Attachment registers the
+profile/node/hosts/access groups, obtains the panel's native `SECRET_KEY`,
+delivers the one-hour configuration-bound package through SSH, starts the node
+and waits for connected status and running Xray. Existing users are not given
+access automatically. Client traffic uses separate Reality/XHTTP ports.
+See [official node installation](https://docs.rw/install/remnawave-node/).
+
 ## Maintenance and updates
 
 Every installation contains a self-contained `rwctl`:
 
 ```bash
 bash /opt/pdm-remnawave/vpn-main/rwctl doctor
+bash /opt/pdm-remnawave/vpn-main/rwctl info
 bash /opt/pdm-remnawave/vpn-main/rwctl backup --archive /root/vpn-main.tgz
 bash rwctl restore --archive /root/vpn-main.tgz --output /opt/pdm-remnawave/vpn-main
 bash /opt/pdm-remnawave/vpn-main/rwctl tokens status
@@ -177,7 +205,11 @@ Additional commands include `preflight`, `tls-test`, `ssh prepare` and
 
 ## Verification
 
-85 Bash checks and ShellCheck passed. A fresh Debian 13 WSL installation with
+93 Bash checks and ShellCheck passed. Summary checks exercised three roles,
+shared hostname ports, IPv6 copy commands, real terminal password display and
+password suppression in redirected output. FI verified its actual summary,
+root-only access card and installed `rwctl info` without changing secrets or
+container start times. A fresh Debian 13 WSL installation with
 native Docker exercised real Confluence HTTPS, cover replacement, node and
 subscription upgrades, and node rollback retaining concurrent database writes.
 The browser check verified English rendering with a Russian locale and no

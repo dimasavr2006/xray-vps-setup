@@ -286,6 +286,7 @@ rw_apply() {
         elif ! grep -q '^SECRET_KEY=' "$RW_OUT/private/node.env"; then
             rw_manifest_set '.status="node-prepared-awaiting-attachment"'
             rw_info "Node prepared in $RW_OUT. Run rwctl node attach on the panel server; SECRET_KEY is not generated locally."
+            rw_install_summary
             return
         fi
     fi
@@ -297,5 +298,5 @@ rw_apply() {
     rw_manifest_set '.status="running-awaiting-acceptance"'
     rw_doctor
     rw_info "Containers started in $RW_OUT."
-    if [[ $RW_ROLE != node ]]; then rw_info 'Panel credentials: private/admin.json; Caddy Auth password: private/secrets.json. Enroll MFA on first login.'; fi
+    rw_install_summary
 }

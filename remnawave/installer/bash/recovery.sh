@@ -160,6 +160,7 @@ rw_restore() {
     rw_firewall; rw_existing_caddy_apply
     rw_start_existing
     rw_manifest_set '.status="running-awaiting-acceptance"|.restored_at_utc=(now|strftime("%Y-%m-%dT%H:%M:%SZ"))'
+    rw_install_summary
     rw_track_files
     rw_info 'Restore complete: keys, API IDs, database, MFA and certificates preserved.'
 }

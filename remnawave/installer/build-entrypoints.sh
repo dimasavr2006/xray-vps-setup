@@ -21,7 +21,7 @@ build() {
     printf '%s\n' 'rw_confluence() {' "cat <<'RW_CONFLUENCE'"
     cat "$ROOT/installer/templates/confluence.html"
     printf '\nRW_CONFLUENCE\n}\n'
-    for file in common addresses site render preflight deploy tokens maintenance recovery upgrade stats ssh tls mfa cli; do cat "$ROOT/installer/bash/$file.sh"; done
+    for file in common addresses site summary render preflight deploy tokens maintenance recovery upgrade stats ssh tls mfa cli; do cat "$ROOT/installer/bash/$file.sh"; done
     printf '\nrw_main %s "$@"\n' "$command"
 }
 for spec in 'rw-setup.sh:setup' 'uninstall.sh:uninstall' 'rwctl:ctl'; do

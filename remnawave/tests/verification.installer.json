@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "date": "2026-10-09",
-  "scope": "English installer, confirmed IP discovery, Confluence cover and component updates",
+  "scope": "English installer, confirmed IP discovery, Confluence cover, component updates and installation access card",
   "runtime": "Linux/Bash/Docker; no Python installer runtime",
   "bash_checks": {
     "main": 44,
@@ -10,7 +10,8 @@
     "interruption_wizard_mfa": 7,
     "tokens": 7,
     "wizard_cover_components": 11,
-    "total": 85
+    "total": 93,
+    "installation_summary": 8
   },
   "checks": {
     "english_runtime_and_templates": "pass",
@@ -36,8 +37,13 @@
     "actual_wget_process_substitution_and_owned_uninstall": "pass",
     "fi_english_ctl_confluence_and_real_ip_dns": "pass: real TLS, unchanged secrets, all container start times preserved",
     "fi_offhost_backup_checksum": "pass",
-    "published_raw_files_and_process_substitution": "pass: exact current source bytes; standalone wget preview and scoped prepared uninstall",
-    "fi_external_trusted_cover_https": "pass"
+    "published_raw_files_and_process_substitution": "Prior English release passed; summary release raw verification follows publication.",
+    "fi_external_trusted_cover_https": "pass",
+    "installation_summary_three_roles_shared_ports_and_ipv6": "pass",
+    "passwords_shown_in_real_terminal_and_hidden_in_redirected_output": "pass: setup summary and explicit info --show-secrets; redirected --show-secrets rejected",
+    "private_access_card_mode_0600_and_managed_integrity": "pass: login passwords included; DB/API/native-management/private-Reality values excluded",
+    "fi_saved_rwctl_info_and_access_card": "pass: real addresses/ports, no secret output, unchanged secrets and all container start times",
+    "fi_summary_backup_offhost": "pass: fi-test-summary-20261009T085500Z.tgz"
   },
   "images": {
     "panel": "3.4.5",
@@ -109,7 +115,7 @@
     "unrelated_runtime_untouched": true,
     "local_plans_and_reports_retained": true,
     "synthetic_ci_modern_backups_removed": true,
-    "owned_wsl_distro_stopped": true,
+    "owned_wsl_distro_stopped": false,
     "base_debian_and_image_cache_retained": true
   },
   "limits": [
@@ -118,6 +124,5 @@
     "External global IPv6 acceptance remains open.",
     "Full passive 48-hour observation was stopped by owner; no recurring checks or update watchers were started.",
     "Statistics compatibility must be verified before changing a panel digest."
-  ],
-  "github_code_commit": "6c5578e633e05b3c994178dcd1d9b4cbc9d6f0cf"
+  ]
 }
