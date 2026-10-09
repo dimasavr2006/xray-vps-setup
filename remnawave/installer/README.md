@@ -109,6 +109,10 @@ private IPv4 /24, по умолчанию 172.29.240.0/24; пересечени�
 "compact-test"` разрешён только для тестов: суммарные жёсткие лимиты контейнеров
 1152 MiB и ещё 128 MiB запаса, без роста swap новых контейнеров. Лимиты:
 панель 512, PostgreSQL 160, Valkey 32, подписки 192, Caddy 96, нода 160 MiB.
+Опциональная интервальная статистика добавляет 96 MiB: общий лимит 1248 MiB;
+в этом режиме heap панели уменьшается до 160 MiB при hard limit 512 MiB.
+Проверка ресурсов учитывает только уже работающие контейнеры данной установки;
+наличие подготовленного manifest не отменяет проверку свободной памяти.
 Параллельный FI с 2 GiB RAM прошёл свежий preflight и реальный запуск 09.10.2026.
 Production-ориентир —
 2 CPU, 4 GiB RAM и 20 GiB свободного диска. Чужие образы и архивы не очищаются.
@@ -143,7 +147,15 @@ bash rwctl restore --archive /private-backups/fi-test.tgz --output /opt/pdm-remn
 bash /opt/pdm-remnawave/fi-test/rwctl upgrade --versions /private/versions.json
 bash /opt/pdm-remnawave/fi-test/rwctl rollback --archive /private-backups/pre-upgrade.tgz
 bash /opt/pdm-remnawave/fi-test/rwctl tls-test
+bash /opt/pdm-remnawave/fi-test/rwctl stats install --stats-port 13100 --dry-run
+bash /opt/pdm-remnawave/fi-test/rwctl stats install --stats-port 13100
+bash /opt/pdm-remnawave/fi-test/rwctl stats status
 ```
+
+Stats addon сохраняет интервальные дельты и подтверждения существующего сборщика
+в собственной схеме PostgreSQL; дополнительных Xray-запросов нет. API только для
+чтения публикуется на loopback и требует отдельный токен. До установки история
+остаётся неизвестной. Подробности: [stats/README.md](../stats/README.md).
 
 Manifest формата 2 помечен `implementation: bash-docker`. Inventory и lock имеют
 версии форматов и environment_id. Секреты — отдельные файлы 0600 в каталоге 0700;
@@ -216,15 +228,15 @@ sudo bash tests/bash/http-entrypoints.sh
 sudo bash tests/bash/live-compose.sh
 ```
 
-Актуальная проверка 09.10.2026: 41 Bash-проверка; реальный wget/process-substitution
+Актуальная проверка 09.10.2026: 43 Bash-проверки; реальный wget/process-substitution
 из каталога без checkout; реальный стек в отдельном локальном Docker-проекте,
 администратор и scoped API-токены, профиль/нода/Hosts/squads, подключённый Xray,
 здоровая subscription-page, Caddy adapt/validate с MFA. Ранние 54 Python-теста
 относятся к удалённому прототипу и не являются тестами этой реализации.
 
 Исходники: `installer/bash/*.sh`, схема jq и Caddy-шаблон. Bash-сборщик объединяет
-их с public lock в три файла `rw-setup.sh`, `uninstall.sh`, `rwctl`. Публикация
-опубликован в каталоге `remnawave/` существующего репозитория, commit `849821f`.
+их с public lock и trusted stats assets в три файла `rw-setup.sh`, `uninstall.sh`,
+`rwctl`. Комплект опубликован в каталоге `remnawave/` существующего репозитория.
 Реальные GitHub raw файлы совпали с проверенными Bash-исходниками; запуск
 через process substitution и scoped uninstall прошёл. На FI Debian 13 amd64 проверена параллельная
 установка с одним `fl.wf.md`, доверенным сертификатом, TCP/XHTTP с внешнего
@@ -234,7 +246,7 @@ sudo bash tests/bash/live-compose.sh
 На отдельном Debian 13 WSL прошли чистые panel/node/panel-node и полный CLI
 backup/purge/restore/upgrade/rollback. Проверен откат после добавления новой
 таблицы и реальное обновление PostgreSQL 18.3 → 18.4 на компонентном стенде.
-41 основной и 9 дополнительных Bash-проверок проходят. Отчёт обслуживания:
+43 основных, 9 archive/upgrade и 7 stats Bash-проверок проходят. Отчёт обслуживания:
 [verification.maintenance.json](../tests/verification.maintenance.json).
 FI наблюдается каждые пять минут до **11.10.2026 02:26 МСК**. Привязка MFA
 владельцем и чистый VPS с публичным DNS остаются открытыми. На FI нет глобального

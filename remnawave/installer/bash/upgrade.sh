@@ -21,11 +21,21 @@ rw_upgrade_activate() {
 rw_upgrade_rollback() {
     local source=$RW_UPGRADE_SOURCE path
     rw_stop_writers
+    # A failed addon activation may have introduced a service absent from the snapshot.
+    if ! jq -e '.stats.enabled==true' "$source/manifest.json" >/dev/null; then
+        local id
+        while IFS= read -r id; do
+            [[ -n $id ]] || continue
+            [[ $(docker inspect --format '{{index .Config.Labels "io.pdm.remnawave.installation"}}' "$id") == "$RW_OWNER" ]] || rw_die 'Чужой stats container при откате.'
+            docker rm -f "$id" >/dev/null
+        done < <(docker ps -aq --filter "label=io.pdm.remnawave.installation=$RW_OWNER" --filter label=com.docker.compose.service=rw_stats)
+    fi
     while IFS= read -r path; do
         [[ $path != rwctl && $path != private/.managed-paths ]] || continue
         cat "$source/$path" | rw_atomic "$RW_OUT/$path" || rw_die 'Не удалось вернуть файл отката.'
     done < <(jq -r '.managed_files[].path' "$source/manifest.json")
     cat "$source/manifest.json" | rw_atomic "$RW_OUT/manifest.json"
+    rw_stats_assets; rw_stats_patch
     rw_restore_data "${source%/installation}"
     rw_start_existing
     rw_install_ctl

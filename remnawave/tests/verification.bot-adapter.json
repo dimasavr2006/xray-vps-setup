@@ -1,0 +1,19 @@
+{
+  "date": "2026-10-09",
+  "panel": "Remnawave 3.4.5, disposable native Debian",
+  "result": "pass",
+  "checks": [
+    "catalog and stable UUID map",
+    "create and repeat",
+    "infinite and fixed expiry",
+    "Unicode note",
+    "squad assignment",
+    "disable and enable user",
+    "subscription URL",
+    "create and update squad",
+    "disable and enable node",
+    "SQLite integrity/FK"
+  ],
+  "telegram_calls": 0,
+  "production_panel_mutated": false
+}

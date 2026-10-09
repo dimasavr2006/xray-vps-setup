@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "mode": "live-account-fixtures",
+  "selected": 4,
+  "verified": 4,
+  "failed": 0,
+  "target_writes": false,
+  "quota_restoration_required": 0,
+  "source_fingerprint": "153ccb6d8540d13c2a7253767bf5e0bdb67ae300b55f9ea98389605acd8ffbb2",
+  "passed": true
+}

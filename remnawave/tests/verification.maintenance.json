@@ -20,7 +20,12 @@
     "ssh_fresh_admin_login_and_root_machine_keys": "pass",
     "ssh_unconfirmed_policy_60_second_rollback": "pass",
     "ipv4_ipv6_peer_firewall_and_docker_bridge_isolation": "pass",
-    "preserved_keys_and_api_uuids": "pass"
+    "preserved_keys_and_api_uuids": "pass",
+    "stats_backup_purge_restore_regenerates_trusted_code": "pass",
+    "stats_readonly_role_recreated_before_restore": "pass",
+    "stats_upgrade_rollback_preserves_ledger": "pass",
+    "stats_live_port_conflict_recovers_previous_stack": "pass",
+    "prepared_manifest_cannot_skip_ram_admission": "pass"
   },
   "fi_daemon_touched_by_restore_or_upgrade": false,
   "notes": [

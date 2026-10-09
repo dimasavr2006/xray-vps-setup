@@ -7,8 +7,14 @@ rw_interactive() {
     fi
     read -r -p 'ID окружения (например fi-test): ' env
     read -r -p 'Режим сети clean / fi-parallel [clean]: ' mode; mode=${mode:-clean}
-    if [[ $role != node ]]; then read -r -p 'Домен панели: ' panel; read -r -p 'Домен подписок: ' sub; read -r -p 'Логин администратора: ' user; read -r -p 'Email администратора: ' email; fi
-    if [[ $role != panel ]]; then read -r -p 'Домен ноды: ' node; fi
+    if [[ $role != node ]]; then
+        read -r -p 'Домен панели: ' panel
+        read -r -p "Домен подписок [$panel]: " sub; sub=${sub:-$panel}
+        read -r -p 'Логин администратора: ' user; read -r -p 'Email администратора: ' email
+    fi
+    if [[ $role != panel ]]; then
+        read -r -p "Домен ноды${panel:+ [$panel]}: " node; node=${node:-$panel}
+    fi
     read -r -p 'Публичные IPv4/IPv6 через запятую: ' ips
     [[ $role != node ]] || read -r -p 'IP панели для управления через запятую: ' sources
     jq -n --arg role "$role" --arg env "$env" --arg mode "$mode" --arg panel "$panel" --arg sub "$sub" --arg node "$node" --arg ips "$ips" --arg sources "$sources" --arg user "$user" --arg email "$email" \
@@ -30,6 +36,8 @@ Remnawave — Linux/Bash/Docker Compose. На VPS Python не нужен.
   rwctl ssh prepare --admin-user USER --public-key FILE --output DIR
   rwctl ssh harden --config FILE --output SERVER_DIR --ssh USER@HOST
   rwctl tls-test [--test-http-port 18082] [--test-https-port 19447] [--dry-run]
+  rwctl stats install [--stats-port 13100] [--archive BACKUP_FILE] [--dry-run]
+  rwctl stats status
   rwctl node attach --config PANEL_FILE --output PANEL_DIR --ssh USER@HOST --node-config NODE_FILE
 Удаление:
   uninstall.sh --output DIR [--dry-run] [--purge] [--yes]
@@ -45,7 +53,7 @@ rw_plan() {
 rw_main() {
     local entry=$1 command
     shift; rw_linux
-    RW_CONFIG=; RW_OUT=; RW_CONNECTION=; RW_DRY_RUN=0; RW_YES=0; RW_PURGE=0; RW_PREPARED_ONLY=0; RW_ROLE_ARG=; RW_ARCHIVE=; RW_SSH=; RW_NODE_CONFIG=; RW_VERSION_FILE=; RW_SSH_ADMIN=; RW_SSH_PUBLIC_KEY=; RW_SSH_NONCE=; RW_TLS_HTTP=; RW_TLS_HTTPS=
+    RW_CONFIG=; RW_OUT=; RW_CONNECTION=; RW_DRY_RUN=0; RW_YES=0; RW_PURGE=0; RW_PREPARED_ONLY=0; RW_ROLE_ARG=; RW_ARCHIVE=; RW_SSH=; RW_NODE_CONFIG=; RW_VERSION_FILE=; RW_SSH_ADMIN=; RW_SSH_PUBLIC_KEY=; RW_SSH_NONCE=; RW_TLS_HTTP=; RW_TLS_HTTPS=; RW_STATS_PORT=; RW_STATS_SOURCE_MANIFEST=
     if [[ $entry == ctl ]]; then
         command=${1:-help}; (( $#==0 )) || shift
         [[ $command != --help && $command != -h ]] || command=help
@@ -58,6 +66,10 @@ rw_main() {
     fi
     if [[ $command == ssh ]]; then
         case ${1:-} in prepare|harden|status|commit|confirm|revert) command=ssh-$1;; *) rw_die 'ssh: prepare или harden.';; esac
+        shift
+    fi
+    if [[ $command == stats ]]; then
+        case ${1:-} in install|status) command=stats-$1;; *) rw_die 'stats: install или status.';; esac
         shift
     fi
     while (( $# )); do
@@ -74,6 +86,7 @@ rw_main() {
           --nonce) [[ $# -ge 2 ]] || rw_die 'Нужен nonce.'; RW_SSH_NONCE=$2; shift;;
           --test-http-port) [[ $# -ge 2 ]] || rw_die 'Нужен PORT.'; RW_TLS_HTTP=$2; shift;;
           --test-https-port) [[ $# -ge 2 ]] || rw_die 'Нужен PORT.'; RW_TLS_HTTPS=$2; shift;;
+          --stats-port) [[ $# -ge 2 ]] || rw_die 'Нужен PORT.'; RW_STATS_PORT=$2; shift;;
           --ssh) [[ $# -ge 2 ]] || rw_die 'Нужен HOST.'; RW_SSH=$2; shift;;
           --node-config) [[ $# -ge 2 ]] || rw_die 'Нужен FILE.'; RW_NODE_CONFIG=$2; shift;;
           --dry-run) RW_DRY_RUN=1;; --yes) RW_YES=1;; --purge) RW_PURGE=1;; --prepared-only) RW_PREPARED_ONLY=1;;
@@ -115,6 +128,8 @@ rw_main() {
       ssh-confirm) rw_ssh_confirm;;
       ssh-revert) rw_ssh_revert;;
       tls-test) rw_tls_test;;
+      stats-install) rw_stats_install;;
+      stats-status) rw_stats_status;;
       uninstall) rw_uninstall;;
       *) rw_die "Неизвестная команда $command.";;
     esac

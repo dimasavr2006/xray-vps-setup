@@ -115,11 +115,13 @@
         "open": false,
         "expected_open": false
       }
-    ]
+    ],
+    "stats_addon": "pass: installed 2026-10-09 01:09 UTC; native collector witness and read-only API",
+    "stats_offhost_backup_checksum": "pass"
   },
   "resources": {
     "disk_free_bytes": 5132484608,
-    "hard_limits_total_mib": 1152,
+    "hard_limits_total_mib": 1248,
     "available_ram_mib": 691
   },
   "containers": [
@@ -170,6 +172,14 @@
       "oom": false,
       "restarts": 0,
       "memory_limit_mib": 32
+    },
+    {
+      "memory_limit_mib": 96,
+      "health": "healthy",
+      "restarts": 0,
+      "name": "/pdm-rw-fi-test-rw_stats-1",
+      "oom": false,
+      "state": "running"
     }
   ],
   "existing_caddy_changed_only_for_acme": true,
@@ -181,7 +191,7 @@
     "48h observation"
   ],
   "github_published": true,
-  "github_commit": "849821f",
+  "github_commit": "release-being-updated",
   "published_raw_process_substitution_and_uninstall": "pass",
   "observation_heartbeat_id": "remnawave-fi",
   "observation": {
@@ -189,6 +199,18 @@
     "deadline_utc": "2026-10-10T23:26:05Z",
     "interval_seconds": 300,
     "report": "/var/lib/pdm-remnawave-observation/fi-test/summary.json",
-    "completed": false
+    "completed": false,
+    "checked_at_utc": "2026-10-09T04:51:52Z",
+    "samples": 66,
+    "failed_samples": 0,
+    "max_gap_seconds": 301
+  },
+  "stats": {
+    "installed_at_utc": "2026-10-09T01:09:39Z",
+    "compatibility": "pinned Panel 3.4.5 and verified processor SHA",
+    "schema_version": 1,
+    "loopback_port": 13100,
+    "reader_memory_limit_mib": 96,
+    "panel_heap_mib": 160
   }
 }

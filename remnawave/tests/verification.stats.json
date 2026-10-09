@@ -1,0 +1,18 @@
+{
+  "date": "2026-10-09",
+  "host": "disposable Debian 13 native Docker",
+  "checks": [
+    "INSERT/UPSERT count positive deltas once",
+    "transaction rollback removes observations and expected samples",
+    "live read-only API and gateway agree, preserving microsecond bounds",
+    "addon failure leaves authoritative panel write intact and marks incomplete",
+    "counter decrease/recreation advances epochs without negative or duplicate bytes",
+    "failed sample is not a confirmed zero",
+    "API role cannot read panel tables, write addon tables or forge samples",
+    "HTTP API requires its separate token",
+    "Moscow 21:00 UTC boundary and arbitrary microsecond checkpoint survive compaction"
+  ],
+  "result": "pass",
+  "production_mutated": false,
+  "additional_xray_poller": false
+}

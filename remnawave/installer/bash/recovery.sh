@@ -48,6 +48,10 @@ rw_backup_open() {
         [[ -f $source/$path && $(sha256sum "$source/$path" | cut -d' ' -f1) == "$sum" ]] || rw_die "Повреждён файл backup: $path"
     done < <(jq -r '.managed_files[]|[.path,.sha256]|@tsv' "$source/manifest.json")
     rw_versions_check "$source/versions.lock.json"
+    if jq -e '.stats.enabled==true' "$source/manifest.json" >/dev/null; then
+        rw_stats_secrets_check "$source/private/stats.json" "$(jq -r '.api_namespace_owner // .ownership_label' "$source/manifest.json")"
+        jq -e '.stats.schema_version==1 and (.stats.port|type=="number" and .==floor and .>=1024 and .<=65535)' "$source/manifest.json" >/dev/null || rw_die 'Несовместимый stats manifest.'
+    fi
     jq -e '
       ([.app_secret,.postgres_password,.metrics_password,.webhook_secret,.auth_password]|all(type=="string" and test("^[a-f0-9]{64}$"))) and
       (.admin_password|type=="string" and test("^Aa1[a-f0-9]{64}$")) and
@@ -82,7 +86,7 @@ rw_restore_files() {
     else [[ ! -d $RW_OUT || -z $(find "$RW_OUT" -mindepth 1 -maxdepth 1 -print -quit) ]] || rw_die 'Каталог восстановления не пуст.'; fi
     rw_lock; RW_MUTATING=1
     while IFS= read -r path; do
-        [[ $path != rwctl && $path != compose.json && $path != config.json && $path != private/.managed-paths && $path != private/ssh-* ]] || continue
+        [[ $path != rwctl && $path != compose.json && $path != config.json && $path != private/.managed-paths && $path != private/ssh-* && $path != plugins/stats/* && $path != private/stats.env && $path != private/stats.token ]] || continue
         cat "$source/$path" | rw_atomic "$RW_OUT/$path"
     done < <(jq -r '.managed_files[].path' "$source/manifest.json")
     # Never execute archived shell code or trust an archived Compose with host mounts.
@@ -94,7 +98,7 @@ rw_restore_files() {
         [[ -s $token ]] && grep -qxE '[A-Za-z0-9._=+/-]+' "$token" || rw_die 'Нет проверенного API-токена подписок в backup.'
         { printf 'APP_PORT=3010\nREMNAWAVE_PANEL_URL=http://rw_panel:3000\nREMNAWAVE_API_TOKEN='; cat "$token"; printf '\nTRUST_PROXY=1\n'; } | rw_atomic "$RW_OUT/private/subscription.env"
     fi
-    rw_render_compose; rw_render_env; rw_render_caddy; rw_install_ctl
+    rw_render_compose; rw_render_env; rw_render_caddy; rw_stats_assets; rw_install_ctl
     rw_track_files
 }
 rw_stop_writers() {
@@ -119,17 +123,20 @@ rw_restore_data() {
         [[ -s $backup/database.dump ]] || rw_die 'Нет dump PostgreSQL.'
         rw_compose up -d --wait --wait-timeout 180 rw_db rw_valkey || rw_die 'База/кеш восстановления не запустились.'
         rw_compose exec -T rw_db pg_restore --list < "$backup/database.dump" >/dev/null || rw_die 'Невалидный PostgreSQL dump.'
+        rw_stats_roles
         # pg_restore --clean alone leaves objects introduced by a failed migration.
         # Writers are stopped; replace only this installation's database completely.
         rw_compose exec -T rw_db dropdb --if-exists --force -U postgres remnawave || rw_die 'Не удалось пересоздать собственную БД.'
         rw_compose exec -T rw_db createdb -U postgres -T template0 remnawave || rw_die 'Не удалось создать БД восстановления.'
         rw_compose exec -T rw_db pg_restore --exit-on-error --single-transaction -U postgres -d remnawave < "$backup/database.dump" || rw_die 'Восстановление PostgreSQL не завершилось.'
+        rw_stats_sql
     fi
 }
 rw_start_existing() {
     if [[ $RW_ROLE != node ]]; then rw_compose up -d --wait --wait-timeout 180 rw_db rw_valkey rw_panel || rw_die 'Панель не прошла запуск.'; rw_wait_panel; rw_panel_login; fi
     rw_compose --profile public up -d rw_caddy || rw_die 'Caddy не запустился.'
     if [[ $RW_ROLE != node ]]; then rw_compose --profile public up -d rw_subscription || rw_die 'Подписки не запустились.'; fi
+    if rw_stats_enabled; then rw_compose --profile public up -d --wait --wait-timeout 90 rw_stats || rw_die 'Stats API не запустился.'; fi
     if [[ $RW_ROLE != panel ]] && grep -q '^SECRET_KEY=' "$RW_OUT/private/node.env"; then rw_compose --profile node up -d rw_node || rw_die 'Нода не запустилась.'; fi
     rw_doctor
 }
@@ -139,9 +146,13 @@ rw_restore() {
     if (( RW_DRY_RUN )); then
         jq -n --arg e "$RW_ENV" --arg dir "$RW_OUT" --arg sha "$RW_BACKUP_SHA" '{environment_id:$e,directory:$dir,archive_sha256:$sha,archive_verified:true,read_only:true}'; return
     fi
-    rw_root; rw_os; rw_deps; rw_docker_install; rw_preflight
+    rw_root; rw_os; rw_deps; rw_docker_install
+    RW_STATS_SOURCE_MANIFEST=$RW_BACKUP/installation/manifest.json
+    rw_preflight
+    RW_STATS_SOURCE_MANIFEST=
     rw_restore_files
     rw_compose --profile public --profile node pull
+    rw_stats_patch
     rw_stop_writers; rw_restore_data "$RW_BACKUP"
     rw_firewall; rw_existing_caddy_apply
     rw_start_existing

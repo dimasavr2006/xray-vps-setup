@@ -42,6 +42,7 @@ rw_render_compose() {
       .services.rw_caddy=(service($v.caddy_auth.image;"rw_caddy")+{profiles:["public"],network_mode:"host",env_file:env("private/caddy.env"),volumes:["./Caddyfile:/etc/caddy/Caddyfile:ro","caddy_data:/data","caddy_config:/config","./site:/srv:ro"]}) |
       if $c.role != "panel" then .services.rw_node=(service($v.node.image;"rw_node")+{profiles:["node"],network_mode:"host",env_file:env("private/node.env")}) else . end |
       .volumes |= with_entries(.value.labels={"io.pdm.remnawave.installation":$owner})' | rw_atomic "$target"
+    rw_stats_compose "$target" "$versions"
 }
 rw_render_env() {
     local panel_port sub_port authority sub_authority

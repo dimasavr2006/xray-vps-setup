@@ -1,0 +1,13 @@
+{
+  "checked_at_utc": "2026-10-08T23:03:53Z",
+  "staging_only": true,
+  "production_storage_kept": true,
+  "domains": [
+    {
+      "domain": "fl.wf.md",
+      "staging_reissue": true,
+      "serial_before": "serial=2CF41DDC67593EDE350473C30FBCF4CB93A2",
+      "serial_after": "serial=2C069620F534981BE103A58F27FB944D99C6"
+    }
+  ]
+}

@@ -157,7 +157,7 @@ rw_firewall() {
         fi
         printf '}\n'
         if [[ $RW_ROLE != node ]]; then
-            printf ' chain forward { type filter hook forward priority -5; policy accept;\n ip daddr %s ip saddr != %s tcp dport { 3000, 3001, 3010, 5432, 6379 } drop\n }\n' "$RW_SUBNET" "$RW_SUBNET"
+            printf ' chain forward { type filter hook forward priority -5; policy accept;\n ip daddr %s ip saddr != %s tcp dport { 3000, 3001, 3010, 5432, 6379, 13100 } drop\n }\n' "$RW_SUBNET" "$RW_SUBNET"
         fi
         printf '}\n'
     } | rw_atomic "$rules"

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC1090,SC2034
 set -euo pipefail
 umask 077
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -83,6 +84,27 @@ docker() { [[ $1 == image && $2 == inspect ]]; }
 rw_resource_checks; passed 'cached pinned images are not charged twice against free disk'
 docker() { return 1; }
 fail_expected rw_resource_checks; unset -f docker df; passed 'missing images retain the full download disk budget'
+awk() {
+    case "$*" in
+      *MemTotal*) printf '8192\n';;
+      *MemAvailable*) printf '128\n';;
+      *) command awk "$@";;
+    esac
+}
+df() { printf 'Filesystem 1B-blocks Used Available Use%% Mounted\nfixture 21474836480 1073741824 20401094656 5%% /\n'; }
+docker() { [[ $1 == image && $2 == inspect ]]; }
+fail_expected rw_resource_checks
+passed 'prepared manifest does not bypass available RAM admission'
+docker() {
+    if [[ $1 == ps ]]; then rw_memory_limits | jq -r 'keys[]'
+    elif [[ $1 == inspect ]]; then
+        jq -n --arg s "$2" --arg owner "$RW_OWNER" --arg cfg "$RW_OUT/compose.json" --argjson limits "$(rw_memory_limits)" '[{State:{Running:true},Config:{Labels:{"io.pdm.remnawave.installation":$owner,"com.docker.compose.project.config_files":$cfg,"com.docker.compose.service":$s}},HostConfig:{Memory:($limits[$s]*1048576)}}]'
+    elif [[ $1 == image ]]; then return 0
+    else return 1; fi
+}
+rw_resource_checks
+unset -f awk docker df
+passed 'running owned containers are credited against their existing RAM reservation'
 df() { printf 'Filesystem 1B-blocks Used Available Use%% Mounted\nfixture 1000 999 1 99%% /\n'; }
 fail_expected rw_resource_checks; unset -f df; passed 'low disk budget blocks before container launch'
 ss() { printf 'LISTEN 0 128 [::]:9443 [::]:* users:(("foreign",pid=999999,fd=1))\n'; }

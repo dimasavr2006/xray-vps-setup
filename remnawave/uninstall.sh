@@ -262,6 +262,486 @@ def require($ok; $message): if $ok then . else error($message) end;
 | require(.node_country | type == "string" and test("^[A-Z]{2}$"); "invalid country code")
 RW_CONFIG_JQ
 }
+rw_stats_schema() {
+cat <<'RW_STATS_PAYLOAD'
+-- Remnawave 3.4.5 addon, schema version 1. All times are observations in UTC.
+-- No foreign keys point to panel history: retention cannot erase our evidence.
+BEGIN;
+DO $$
+BEGIN
+  IF (SELECT array_agg(column_name||':'||data_type ORDER BY ordinal_position)
+      FROM information_schema.columns WHERE table_schema='public' AND table_name='nodes_user_usage_history')
+     IS DISTINCT FROM ARRAY['node_id:bigint','user_id:bigint','total_bytes:bigint',
+                            'created_at:date','updated_at:timestamp without time zone'] THEN
+    RAISE EXCEPTION 'Unsupported nodes_user_usage_history schema';
+  END IF;
+END $$;
+CREATE SCHEMA IF NOT EXISTS pdm_stats;
+CREATE TABLE IF NOT EXISTS pdm_stats.metadata (
+  singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
+  version integer NOT NULL CHECK (version=1), installed_at timestamptz NOT NULL,
+  panel_digest text NOT NULL, max_sample_gap_seconds integer NOT NULL DEFAULT 90
+);
+INSERT INTO pdm_stats.metadata(singleton,version,installed_at,panel_digest)
+VALUES (true,1,clock_timestamp(),'b16d724b90fd7c9fec2df04bd28938a671cafc62894105068e11550ee3449c56')
+ON CONFLICT DO NOTHING;
+CREATE TABLE IF NOT EXISTS pdm_stats.node_state (
+  node_id bigint PRIMARY KEY, node_uuid uuid NOT NULL, first_sample_at timestamptz,
+  last_sample_at timestamptz, last_sample_succeeded boolean NOT NULL DEFAULT false
+);
+CREATE TABLE IF NOT EXISTS pdm_stats.samples (
+  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  node_id bigint NOT NULL, node_uuid uuid NOT NULL,
+  observed_at timestamptz NOT NULL, previous_at timestamptz,
+  succeeded boolean NOT NULL, policy_ignore_below_bytes bigint NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS samples_node_time ON pdm_stats.samples(node_id,observed_at);
+CREATE TABLE IF NOT EXISTS pdm_stats.expected (
+  sample_id bigint NOT NULL REFERENCES pdm_stats.samples(id), node_id bigint NOT NULL,
+  user_id bigint NOT NULL, remaining_bytes bigint NOT NULL CHECK (remaining_bytes>=0),
+  invalidated boolean NOT NULL DEFAULT false,
+  PRIMARY KEY(sample_id,user_id)
+);
+ALTER TABLE pdm_stats.expected ADD COLUMN IF NOT EXISTS invalidated boolean NOT NULL DEFAULT false;
+DROP INDEX IF EXISTS pdm_stats.expected_pending;
+CREATE INDEX IF NOT EXISTS expected_pending ON pdm_stats.expected(node_id,user_id,sample_id)
+WHERE remaining_bytes>0 AND NOT invalidated;
+CREATE TABLE IF NOT EXISTS pdm_stats.counter_state (
+  node_id bigint NOT NULL, user_id bigint NOT NULL, source_day date NOT NULL,
+  node_uuid uuid NOT NULL, total_bytes bigint NOT NULL,
+  epoch bigint NOT NULL DEFAULT 0, last_observed_at timestamptz NOT NULL,
+  deleted boolean NOT NULL DEFAULT false,
+  PRIMARY KEY(node_id,user_id,source_day)
+);
+CREATE TABLE IF NOT EXISTS pdm_stats.events (
+  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  node_id bigint NOT NULL, node_uuid uuid NOT NULL, user_id bigint NOT NULL,
+  observed_at timestamptz NOT NULL, source_day date NOT NULL, epoch bigint NOT NULL,
+  delta_bytes bigint NOT NULL CHECK(delta_bytes>=0)
+);
+CREATE INDEX IF NOT EXISTS events_user_time ON pdm_stats.events(user_id,observed_at);
+CREATE TABLE IF NOT EXISTS pdm_stats.gaps (
+  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  node_id bigint NOT NULL, user_id bigint,
+  start_at timestamptz NOT NULL, end_at timestamptz NOT NULL,
+  reason text NOT NULL, CHECK(end_at>=start_at)
+);
+CREATE INDEX IF NOT EXISTS gaps_user_time ON pdm_stats.gaps(user_id,start_at,end_at);
+CREATE TABLE IF NOT EXISTS pdm_stats.hours (
+  node_uuid uuid NOT NULL, node_id bigint NOT NULL, user_id bigint NOT NULL,
+  hour_at timestamptz NOT NULL, total_bytes bigint NOT NULL CHECK(total_bytes>=0),
+  raw_preserved boolean NOT NULL, PRIMARY KEY(node_uuid,user_id,hour_at)
+);
+CREATE TABLE IF NOT EXISTS pdm_stats.checkpoints (
+  name text PRIMARY KEY, observed_at timestamptz NOT NULL
+);
+
+-- Initialize current panel counters as a baseline; do not fabricate old observations.
+INSERT INTO pdm_stats.counter_state(node_id,user_id,source_day,node_uuid,total_bytes,last_observed_at)
+SELECT h.node_id,h.user_id,h.created_at,n.uuid,h.total_bytes,clock_timestamp()
+FROM public.nodes_user_usage_history h JOIN public.nodes n ON n.id=h.node_id
+ON CONFLICT DO NOTHING;
+
+CREATE OR REPLACE FUNCTION pdm_stats.observe_sample(
+  p_node_id bigint,p_uuid uuid,p_succeeded boolean,p_users jsonb,p_threshold bigint DEFAULT 0)
+RETURNS bigint LANGUAGE plpgsql SECURITY DEFINER SET search_path=pdm_stats,pg_catalog AS $$
+DECLARE previous timestamptz; observed timestamptz:=clock_timestamp(); sid bigint; item jsonb;
+BEGIN
+  IF NOT EXISTS(SELECT 1 FROM public.nodes WHERE id=p_node_id AND uuid=p_uuid)
+     OR jsonb_typeof(p_users)<>'array' OR p_threshold<0 THEN
+    RAISE EXCEPTION 'Invalid sample node or payload';
+  END IF;
+  INSERT INTO pdm_stats.node_state(node_id,node_uuid) VALUES(p_node_id,p_uuid) ON CONFLICT DO NOTHING;
+  SELECT last_sample_at INTO previous FROM pdm_stats.node_state WHERE node_id=p_node_id FOR UPDATE;
+  INSERT INTO pdm_stats.samples(node_id,node_uuid,observed_at,previous_at,succeeded,policy_ignore_below_bytes)
+  VALUES(p_node_id,p_uuid,observed,previous,p_succeeded,p_threshold) RETURNING id INTO sid;
+  IF p_succeeded THEN
+    FOR item IN SELECT value FROM jsonb_array_elements(p_users) LOOP
+      IF (item->>'user_id') !~ '^[1-9][0-9]*$' OR (item->>'bytes') !~ '^(0|[1-9][0-9]*)$' THEN
+        RAISE EXCEPTION 'Invalid sample counter';
+      END IF;
+      INSERT INTO pdm_stats.expected(sample_id,node_id,user_id,remaining_bytes)
+      VALUES(sid,p_node_id,(item->>'user_id')::bigint,(item->>'bytes')::bigint);
+    END LOOP;
+  END IF;
+  IF previous IS NOT NULL AND (NOT p_succeeded OR observed-previous>
+      (SELECT max_sample_gap_seconds*interval '1 second' FROM pdm_stats.metadata)) THEN
+    INSERT INTO pdm_stats.gaps(node_id,start_at,end_at,reason)
+    VALUES(p_node_id,previous,observed,CASE WHEN p_succeeded THEN 'sample_gap' ELSE 'sample_failed' END);
+  END IF;
+  UPDATE pdm_stats.node_state SET last_sample_at=observed,
+    last_sample_succeeded=p_succeeded,
+    first_sample_at=CASE WHEN p_succeeded THEN coalesce(first_sample_at,observed) ELSE first_sample_at END
+  WHERE node_id=p_node_id;
+  RETURN sid;
+END $$;
+
+CREATE OR REPLACE FUNCTION pdm_stats.capture_history()
+RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path=pdm_stats,pg_catalog AS $$
+DECLARE state pdm_stats.counter_state%ROWTYPE; observed timestamptz:=clock_timestamp();
+        delta bigint:=0; next_epoch bigint:=0; remaining bigint; allocated bigint;
+        expected_row record; node_uuid_value uuid; why text;
+BEGIN
+  IF TG_OP='DELETE' THEN
+    UPDATE pdm_stats.counter_state SET deleted=true
+    WHERE node_id=OLD.node_id AND user_id=OLD.user_id AND source_day=OLD.created_at;
+    RETURN OLD;
+  END IF;
+  SELECT * INTO state FROM pdm_stats.counter_state
+  WHERE node_id=NEW.node_id AND user_id=NEW.user_id AND source_day=NEW.created_at FOR UPDATE;
+  SELECT uuid INTO node_uuid_value FROM public.nodes WHERE id=NEW.node_id;
+  IF node_uuid_value IS NULL THEN RAISE EXCEPTION 'History node missing'; END IF;
+  IF state.node_id IS NULL THEN
+    delta:=NEW.total_bytes;
+  ELSIF (TG_OP='INSERT' AND state.deleted) OR NEW.total_bytes<state.total_bytes THEN
+    next_epoch:=state.epoch+1;
+    why:=CASE WHEN TG_OP='INSERT' THEN 'row_recreated' ELSE 'counter_decreased' END;
+  ELSE
+    next_epoch:=state.epoch;
+    delta:=NEW.total_bytes-state.total_bytes;
+  END IF;
+  IF delta<0 THEN RAISE EXCEPTION 'Negative history delta'; END IF;
+  IF why IS NOT NULL THEN
+    INSERT INTO pdm_stats.gaps(node_id,user_id,start_at,end_at,reason)
+    VALUES(NEW.node_id,NEW.user_id,state.last_observed_at,observed,why);
+    UPDATE pdm_stats.expected SET invalidated=true
+    WHERE node_id=NEW.node_id AND user_id=NEW.user_id AND remaining_bytes>0;
+  END IF;
+  INSERT INTO pdm_stats.counter_state(node_id,user_id,source_day,node_uuid,total_bytes,epoch,last_observed_at)
+  VALUES(NEW.node_id,NEW.user_id,NEW.created_at,node_uuid_value,NEW.total_bytes,next_epoch,observed)
+  ON CONFLICT(node_id,user_id,source_day) DO UPDATE SET total_bytes=EXCLUDED.total_bytes,
+    epoch=EXCLUDED.epoch,last_observed_at=EXCLUDED.last_observed_at,deleted=false;
+  IF delta>0 THEN
+    remaining:=delta;
+    FOR expected_row IN SELECT ex.*,sm.observed_at AS sample_observed_at FROM pdm_stats.expected ex
+      JOIN pdm_stats.samples sm ON sm.id=ex.sample_id
+      WHERE ex.node_id=NEW.node_id AND ex.user_id=NEW.user_id AND ex.remaining_bytes>0 AND NOT ex.invalidated
+      ORDER BY ex.sample_id FOR UPDATE OF ex LOOP
+      allocated:=least(remaining,expected_row.remaining_bytes);
+      INSERT INTO pdm_stats.events(node_id,node_uuid,user_id,observed_at,source_day,epoch,delta_bytes)
+      VALUES(NEW.node_id,node_uuid_value,NEW.user_id,expected_row.sample_observed_at,NEW.created_at,next_epoch,allocated);
+      UPDATE pdm_stats.hours SET total_bytes=total_bytes+allocated
+      WHERE node_uuid=node_uuid_value AND user_id=NEW.user_id
+        AND hour_at=date_trunc('hour',expected_row.sample_observed_at AT TIME ZONE 'UTC') AT TIME ZONE 'UTC';
+      UPDATE pdm_stats.expected SET remaining_bytes=remaining_bytes-allocated
+      WHERE sample_id=expected_row.sample_id AND user_id=NEW.user_id;
+      remaining:=remaining-allocated;
+      EXIT WHEN remaining=0;
+    END LOOP;
+    IF remaining>0 THEN
+      INSERT INTO pdm_stats.events(node_id,node_uuid,user_id,observed_at,source_day,epoch,delta_bytes)
+      VALUES(NEW.node_id,node_uuid_value,NEW.user_id,observed,NEW.created_at,next_epoch,remaining);
+      INSERT INTO pdm_stats.gaps(node_id,user_id,start_at,end_at,reason)
+      VALUES(NEW.node_id,NEW.user_id,coalesce(state.last_observed_at,
+        (SELECT installed_at FROM pdm_stats.metadata)),observed,'unwitnessed_delta');
+    END IF;
+  END IF;
+  RETURN NEW;
+EXCEPTION WHEN OTHERS THEN
+  -- An addon failure cannot roll back the panel's authoritative traffic write.
+  RAISE WARNING 'PDM_STATS_CAPTURE_FAILED: %', SQLSTATE;
+  BEGIN
+    INSERT INTO pdm_stats.gaps(node_id,user_id,start_at,end_at,reason)
+    VALUES(coalesce(NEW.node_id,OLD.node_id),coalesce(NEW.user_id,OLD.user_id),
+      coalesce(state.last_observed_at,observed),observed,'capture_error');
+  EXCEPTION WHEN OTHERS THEN NULL;
+  END;
+  RETURN CASE WHEN TG_OP='DELETE' THEN OLD ELSE NEW END;
+END $$;
+DROP TRIGGER IF EXISTS pdm_stats_history ON public.nodes_user_usage_history;
+CREATE TRIGGER pdm_stats_history AFTER INSERT OR UPDATE OR DELETE ON public.nodes_user_usage_history
+FOR EACH ROW EXECUTE FUNCTION pdm_stats.capture_history();
+
+CREATE OR REPLACE FUNCTION pdm_stats.add_checkpoint(p_name text,p_at timestamptz)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path=pdm_stats,pg_catalog AS $$
+BEGIN
+  IF EXISTS(SELECT 1 FROM pdm_stats.hours WHERE hour_at=date_trunc('hour',p_at AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
+            AND NOT raw_preserved) THEN RAISE EXCEPTION 'Checkpoint hour was already compacted'; END IF;
+  INSERT INTO pdm_stats.checkpoints VALUES(p_name,p_at) ON CONFLICT DO NOTHING;
+  IF EXISTS(SELECT 1 FROM pdm_stats.checkpoints WHERE name=p_name AND observed_at<>p_at) THEN
+    RAISE EXCEPTION 'Checkpoint is immutable'; END IF;
+END $$;
+
+CREATE OR REPLACE FUNCTION pdm_stats.compact(p_before timestamptz)
+RETURNS bigint LANGUAGE plpgsql SECURITY DEFINER SET search_path=pdm_stats,pg_catalog AS $$
+DECLARE removed bigint;
+BEGIN
+  IF p_before>date_trunc('hour',(clock_timestamp()-interval '48 hours') AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
+    THEN RAISE EXCEPTION 'Only closed observations older than 48h may be compacted'; END IF;
+  WITH grouped AS (
+    SELECT e.node_uuid,e.node_id,e.user_id,
+      date_trunc('hour',e.observed_at AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' AS hour_at,sum(e.delta_bytes) AS bytes
+    FROM pdm_stats.events e WHERE e.observed_at<p_before
+      AND NOT EXISTS(SELECT 1 FROM pdm_stats.hours h WHERE h.node_uuid=e.node_uuid AND h.user_id=e.user_id
+        AND h.hour_at=date_trunc('hour',e.observed_at AT TIME ZONE 'UTC') AT TIME ZONE 'UTC')
+    GROUP BY e.node_uuid,e.node_id,e.user_id,date_trunc('hour',e.observed_at AT TIME ZONE 'UTC')
+  )
+  INSERT INTO pdm_stats.hours(node_uuid,node_id,user_id,hour_at,total_bytes,raw_preserved)
+  SELECT g.node_uuid,g.node_id,g.user_id,g.hour_at,g.bytes,
+    EXISTS(SELECT 1 FROM pdm_stats.checkpoints c WHERE
+      date_trunc('hour',c.observed_at AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'=g.hour_at)
+  FROM grouped g
+  ON CONFLICT DO NOTHING;
+  DELETE FROM pdm_stats.events e USING pdm_stats.hours h
+  WHERE e.node_uuid=h.node_uuid AND e.user_id=h.user_id AND e.observed_at>=h.hour_at
+    AND e.observed_at<h.hour_at+interval '1 hour' AND NOT h.raw_preserved;
+  GET DIAGNOSTICS removed=ROW_COUNT;
+  RETURN removed;
+END $$;
+
+CREATE OR REPLACE FUNCTION pdm_stats.status()
+RETURNS jsonb LANGUAGE sql SECURITY DEFINER SET search_path=pdm_stats,pg_catalog AS $$
+SELECT jsonb_build_object('schema_version',version,'installed_at',installed_at,
+                         'panel_digest',panel_digest,'observed_at',clock_timestamp()) FROM pdm_stats.metadata
+$$;
+
+CREATE OR REPLACE FUNCTION pdm_stats.usage(p_user bigint,p_start timestamptz,p_end timestamptz)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pdm_stats,pg_catalog AS $$
+DECLARE result jsonb; observed timestamptz:=clock_timestamp(); born timestamptz;
+        effective_start timestamptz; maximum_gap interval;
+BEGIN
+  IF p_user<=0 OR p_start>p_end OR p_end>observed+interval '5 seconds' THEN
+    RAISE EXCEPTION 'Invalid user or observation interval'; END IF;
+  SELECT created_at AT TIME ZONE 'UTC' INTO born FROM public.users WHERE id=p_user;
+  effective_start:=greatest(p_start,coalesce(born,p_start));
+  SELECT max_sample_gap_seconds*interval '1 second' INTO maximum_gap FROM pdm_stats.metadata;
+  WITH totals AS (
+    SELECT node_id,node_uuid,sum(delta_bytes)::bigint AS bytes FROM pdm_stats.events e
+    WHERE user_id=p_user AND observed_at>=p_start AND observed_at<p_end
+      AND NOT EXISTS(SELECT 1 FROM pdm_stats.hours h WHERE h.node_uuid=e.node_uuid
+        AND h.user_id=e.user_id AND h.hour_at<=e.observed_at AND e.observed_at<h.hour_at+interval '1 hour'
+        AND h.hour_at>=p_start AND h.hour_at+interval '1 hour'<=p_end)
+    GROUP BY node_id,node_uuid
+    UNION ALL
+    SELECT node_id,node_uuid,total_bytes FROM pdm_stats.hours
+    WHERE user_id=p_user AND hour_at>=p_start AND hour_at+interval '1 hour'<=p_end
+  ), amounts AS (
+    SELECT node_id,node_uuid,sum(bytes)::bigint AS bytes FROM totals GROUP BY node_id,node_uuid
+  ), scope AS (
+    SELECT id AS node_id,uuid AS node_uuid FROM public.nodes
+    UNION SELECT node_id,node_uuid FROM amounts
+  ), coverage AS (
+    SELECT s.node_id,s.node_uuid,
+      coalesce((effective_start>=p_end AND NOT EXISTS(SELECT 1 FROM amounts a WHERE a.node_id=s.node_id AND a.bytes>0)) OR (
+        effective_start<p_end AND
+        st.first_sample_at<=effective_start AND st.last_sample_at>=p_end-maximum_gap
+        AND (st.last_sample_at>=p_end OR st.last_sample_succeeded)
+        AND NOT EXISTS(SELECT 1 FROM pdm_stats.gaps g WHERE g.node_id=s.node_id
+          AND (g.user_id IS NULL OR g.user_id=p_user) AND g.start_at<p_end AND g.end_at>=effective_start)
+        AND NOT EXISTS(SELECT 1 FROM pdm_stats.expected ex JOIN pdm_stats.samples sm ON sm.id=ex.sample_id
+          WHERE ex.node_id=s.node_id AND ex.user_id=p_user AND ex.remaining_bytes>0 AND NOT ex.invalidated
+            AND sm.observed_at>=effective_start AND sm.observed_at<p_end)
+        AND NOT EXISTS(SELECT 1 FROM pdm_stats.hours h WHERE h.node_id=s.node_id AND h.user_id=p_user
+          AND NOT raw_preserved AND h.hour_at<p_end AND h.hour_at+interval '1 hour'>p_start
+          AND NOT (h.hour_at>=p_start AND h.hour_at+interval '1 hour'<=p_end))
+      ),false) AS complete, st.last_sample_at AS measured_until
+    FROM scope s LEFT JOIN pdm_stats.node_state st USING(node_id)
+  ), summary AS (
+    SELECT coalesce(bool_and(complete),false) AS complete, min(measured_until) AS measured_until FROM coverage
+  )
+  SELECT jsonb_build_object('schema_version',1,'user_id',p_user,'start',p_start,'end',p_end,
+    'observed_at',observed,'measured_until',(SELECT measured_until FROM summary),
+    'precision','Panel-accounted bytes at database observation time; normal sample lag is explicit',
+    'nodes',coalesce((SELECT jsonb_agg(jsonb_build_object('node_uuid',node_uuid,'bytes',bytes::text)
+      ORDER BY node_uuid) FROM amounts),'[]'::jsonb),
+    'covered_node_uuids',coalesce((SELECT jsonb_agg(node_uuid ORDER BY node_uuid) FROM coverage WHERE complete),'[]'::jsonb),
+    'complete',(SELECT complete FROM summary),'unknown_bytes','0','unknown_bytes_are_quantified',(SELECT complete FROM summary),
+    'known_bytes',coalesce((SELECT sum(bytes) FROM amounts),0)::text,
+    'total_bytes',CASE WHEN (SELECT complete FROM summary) THEN
+      coalesce((SELECT sum(bytes) FROM amounts),0)::text ELSE NULL END,
+    'coverage',coalesce((SELECT jsonb_agg(jsonb_build_object('node_uuid',node_uuid,'complete',complete,
+      'measured_until',measured_until) ORDER BY node_uuid) FROM coverage),'[]'::jsonb)) INTO result;
+  RETURN result;
+END $$;
+REVOKE ALL ON SCHEMA pdm_stats FROM PUBLIC;
+REVOKE ALL ON ALL FUNCTIONS IN SCHEMA pdm_stats FROM PUBLIC;
+COMMIT;
+
+RW_STATS_PAYLOAD
+}
+rw_stats_hook() {
+cat <<'RW_STATS_PAYLOAD'
+'use strict';
+// Observe the panel's existing getUsersStats call. No additional Xray query/reset occurs.
+const { AsyncLocalStorage } = require('node:async_hooks');
+const { PrismaClient } = require('/opt/app/node_modules/@prisma/client');
+const scope = new AsyncLocalStorage();
+const instrumented = Symbol.for('pdm.stats.getUsersStats.instrumented.v1');
+let database;
+
+function db() {
+  if (!database) {
+    const url = new URL(process.env.DATABASE_URL);
+    url.searchParams.set('connection_limit', '1');
+    url.searchParams.set('pool_timeout', '1');
+    url.searchParams.set('connect_timeout', '2');
+    url.searchParams.set('socket_timeout', '2');
+    database = new PrismaClient({ datasources: { db: { url: url.toString() } }, log: [] });
+  }
+  return database;
+}
+
+async function witness(context, result) {
+  context.observed = true;
+  try {
+    let success = result?.isOk === true;
+    const expected = [];
+    if (success) {
+      if (!Array.isArray(result.response?.users)) throw new Error('invalid stats response');
+      for (const user of result.response.users) {
+        const total = user.downlink + user.uplink;
+        // This matches the pinned worker's accepted numeric usernames and byte threshold.
+        if (!/^[1-9][0-9]*$/.test(String(user.username))) continue;
+        if (!Number.isSafeInteger(total) || total < 0) throw new Error('unsafe counter');
+        if (BigInt(total) < BigInt(context.ignoreBelowBytes)) continue;
+        expected.push({ user_id: String(user.username), bytes: String(total) });
+      }
+    }
+    await db().$queryRawUnsafe(
+      'SELECT pdm_stats.observe_sample($1::bigint,$2::uuid,$3::boolean,$4::jsonb,$5::bigint)',
+      BigInt(context.nodeId), context.nodeUuid, success, JSON.stringify(expected),
+      BigInt(context.ignoreBelowBytes),
+    );
+  } catch (error) {
+    // Observation failure must not interrupt the panel after its counter read/reset.
+    console.error('PDM_STATS_OBSERVATION_FAILED', typeof error?.code === 'string' ? error.code : 'observer');
+  }
+}
+
+function instrument(instance) {
+  const axios = instance.axios;
+  if (axios[instrumented]) return;
+  const original = axios.getUsersStats;
+  if (typeof original !== 'function') throw new Error('unsupported worker');
+  axios.getUsersStats = async function (...args) {
+    const context = scope.getStore();
+    try {
+      const result = await original.apply(this, args);
+      if (context) await witness(context, result);
+      return result;
+    } catch (error) {
+      if (context) await witness(context, { isOk: false });
+      throw error;
+    }
+  };
+  axios[instrumented] = true;
+}
+
+exports.wrapProcess = function (instance, job, original) {
+  try {
+    instrument(instance);
+  } catch {
+    console.error('PDM_STATS_OBSERVATION_FAILED', 'instrumentation');
+    return original();
+  }
+  const context = {
+    nodeId: job.data.nodeId, nodeUuid: job.data.nodeUuid,
+    ignoreBelowBytes: instance.ignoreBelowBytes ?? 0n, observed: false,
+  };
+  return scope.run(context, async () => {
+    try {
+      return await original();
+    } finally {
+      if (!context.observed) await witness(context, { isOk: false });
+    }
+  });
+};
+
+RW_STATS_PAYLOAD
+}
+rw_stats_server() {
+cat <<'RW_STATS_PAYLOAD'
+'use strict';
+const http = require('node:http');
+const crypto = require('node:crypto');
+const fs = require('node:fs');
+const { PrismaClient } = require('/opt/app/node_modules/@prisma/client');
+const token = fs.readFileSync(process.env.PDM_STATS_TOKEN_FILE, 'utf8').trim();
+if (!/^[a-f0-9]{64}$/.test(token)) throw new Error('Invalid stats token file');
+const db = new PrismaClient({ datasources: { db: { url: process.env.DATABASE_URL } }, log: [] });
+const expected = Buffer.from('Bearer ' + token);
+
+function moment(value) {
+  const match = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.(\d{1,6}))?(?:Z|[+-]\d{2}:\d{2})$/.exec(value || '');
+  if (!match) return null;
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return null;
+  // Keep PostgreSQL's microsecond precision; JavaScript Date is used only for validation.
+  return { text: value, micros: BigInt(Math.floor(parsed.getTime() / 1000)) * 1000000n +
+           BigInt((match[1] || '').padEnd(6, '0') || '0') };
+}
+
+function send(response, code, value) {
+  response.writeHead(code, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+  response.end(JSON.stringify(value));
+}
+
+const server = http.createServer(async (request, response) => {
+  const received = Buffer.from(request.headers.authorization || '');
+  if (received.length !== expected.length || !crypto.timingSafeEqual(received, expected)) {
+    send(response, 401, { error: 'unauthorized' }); return;
+  }
+  if (request.method !== 'GET') { send(response, 405, { error: 'method' }); return; }
+  try {
+    const url = new URL(request.url, 'http://stats.internal');
+    if (url.pathname === '/health') {
+      const result = await db.$queryRawUnsafe('SELECT pdm_stats.status() AS result');
+      send(response, 200, result[0].result); return;
+    }
+    const match = /^\/v1\/users\/([1-9][0-9]{0,17})\/usage$/.exec(url.pathname);
+    if (!match) { send(response, 404, { error: 'path' }); return; }
+    const start = moment(url.searchParams.get('start'));
+    const end = moment(url.searchParams.get('end'));
+    if (!start || !end || start.micros > end.micros || end.micros > BigInt(Date.now() + 5000) * 1000n) {
+      send(response, 400, { error: 'interval' }); return;
+    }
+    const result = await db.$queryRawUnsafe('SELECT pdm_stats.usage($1::bigint,$2::timestamptz,$3::timestamptz) AS result',
+                                           BigInt(match[1]), start.text, end.text);
+    send(response, 200, result[0].result);
+  } catch (error) {
+    console.error('PDM_STATS_API_ERROR', typeof error?.code === 'string' ? error.code : 'database');
+    send(response, 503, { error: 'unavailable' });
+  }
+});
+server.headersTimeout = 10000;
+server.requestTimeout = 10000;
+server.maxConnections = 32;
+server.listen(Number(process.env.PDM_STATS_PORT || 13100), '0.0.0.0');
+async function stop() { server.close(); await db.$disconnect(); }
+process.on('SIGTERM', stop);
+process.on('SIGINT', stop);
+
+RW_STATS_PAYLOAD
+}
+rw_stats_patcher() {
+cat <<'RW_STATS_PAYLOAD'
+'use strict';
+// Run inside the pinned official image, against its own extracted processor bundle.
+const fs = require('node:fs');
+const crypto = require('node:crypto');
+const original = fs.readFileSync(process.argv[2]);
+const expected = '3c746587906be64386f673bb313a5813e4cab8283de1c847bf97187813fdb62e';
+if (crypto.createHash('sha256').update(original).digest('hex') !== expected) {
+  throw new Error('Unsupported Remnawave processor bundle; no patch applied');
+}
+const source = original.toString('utf8');
+const classStart = source.indexOf('function RecordUserUsageQueueProcessor(');
+const methodStart = source.indexOf('{key:"process",value:function process(e){', classStart);
+const methodEnd = source.indexOf('}},{key:"handleOk"', methodStart);
+if (classStart < 0 || methodStart < classStart || methodEnd < methodStart) throw new Error('Worker shape changed');
+const prefix = '{key:"process",value:function process(e){';
+const body = source.slice(methodStart + prefix.length, methodEnd);
+if (!body.startsWith('return ') || !body.endsWith('.call(this)')) throw new Error('Worker body changed');
+const expression = body.slice('return '.length);
+const replacement = prefix + 'return require("/opt/pdm-stats/panel-hook.cjs").wrapProcess(this,e,()=>(' + expression + '))';
+const patched = source.slice(0, methodStart) + replacement + source.slice(methodEnd);
+// Compile syntax without executing a server, accessing credentials or contacting Xray.
+new (require('node:vm').Script)(patched);
+fs.writeFileSync(process.argv[3], patched, { mode: 0o600 });
+console.log('Patched one pinned worker process method; base SHA256 verified.');
+
+RW_STATS_PAYLOAD
+}
 # shellcheck shell=bash
 rw_die() { printf 'Ошибка: %s\n' "$*" >&2; exit 1; }
 rw_info() { printf '%s\n' "$*" >&2; }
@@ -442,6 +922,7 @@ rw_render_compose() {
       .services.rw_caddy=(service($v.caddy_auth.image;"rw_caddy")+{profiles:["public"],network_mode:"host",env_file:env("private/caddy.env"),volumes:["./Caddyfile:/etc/caddy/Caddyfile:ro","caddy_data:/data","caddy_config:/config","./site:/srv:ro"]}) |
       if $c.role != "panel" then .services.rw_node=(service($v.node.image;"rw_node")+{profiles:["node"],network_mode:"host",env_file:env("private/node.env")}) else . end |
       .volumes |= with_entries(.value.labels={"io.pdm.remnawave.installation":$owner})' | rw_atomic "$target"
+    rw_stats_compose "$target" "$versions"
 }
 rw_render_env() {
     local panel_port sub_port authority sub_authority
@@ -519,21 +1000,35 @@ rw_render() {
 }
 # shellcheck shell=bash
 rw_resource_checks() {
-    local total available free required minram mincpu cpus image cached=0 path=$RW_OUT
+    local total available free required minram mincpu cpus image cached=0 path=$RW_OUT id limits credit=0
     total=$(awk '/MemTotal:/ {print int($2/1024)}' /proc/meminfo)
     available=$(awk '/MemAvailable:/ {print int($2/1024)}' /proc/meminfo)
     cpus=$(getconf _NPROCESSORS_ONLN)
     minram=1536; mincpu=1
     if [[ $(rw_cfg '.resources.purpose') == production ]]; then minram=4096; mincpu=2; fi
     (( total >= minram && cpus >= mincpu )) || rw_die 'Недостаточно RAM/CPU для выбранного назначения.'
-    if ! [[ -f $RW_OUT/manifest.json ]]; then
-        required=$(rw_memory_limits | jq --arg role "$RW_ROLE" 'if $role=="node" then .rw_caddy+.rw_node
-          elif $role=="panel" then del(.rw_node)|[.[]]|add else [.[]]|add end')
-        # Compact tests reserve host headroom as well as every container's hard limit.
-        if [[ $(rw_cfg '.resources.profile') == compact-test ]]; then required=$((required+128));
-        elif [[ $RW_ROLE == node ]]; then required=$((required+128)); fi
-        (( available >= required )) || rw_die "Для новых контейнеров требуется $required MiB свободной RAM сверх действующих служб."
+    limits=$(rw_memory_limits | jq --arg role "$RW_ROLE" 'if $role=="node" then {rw_caddy,rw_node}
+      elif $role=="panel" then del(.rw_node) else . end')
+    if rw_stats_enabled; then limits=$(jq '.rw_stats=96' <<< "$limits"); fi
+    required=$(jq '[.[]]|add' <<< "$limits")
+    # A prepared manifest has no running memory reservation. Credit only this
+    # installation's running containers, up to each requested hard limit.
+    if [[ -f $RW_OUT/manifest.json ]] && command -v docker >/dev/null 2>&1; then
+        while IFS= read -r id; do
+            [[ -n $id ]] || continue
+            credit=$(docker inspect "$id" | jq --arg owner "$RW_OWNER" --arg cfg "$RW_OUT/compose.json" --argjson limits "$limits" '
+              [.[0]|select(.State.Running and .Config.Labels["io.pdm.remnawave.installation"]==$owner
+              and .Config.Labels["com.docker.compose.project.config_files"]==$cfg) |
+              (.Config.Labels["com.docker.compose.service"]) as $s |
+              select($limits[$s]!=null and .HostConfig.Memory>0) |
+              [(.HostConfig.Memory/1048576|floor),$limits[$s]]|min]|add // 0')
+            required=$((required-credit))
+        done < <(docker ps -q --filter "label=io.pdm.remnawave.installation=$RW_OWNER")
     fi
+    # Compact tests reserve host headroom as well as every container's hard limit.
+    if [[ $(rw_cfg '.resources.profile') == compact-test ]]; then required=$((required+128));
+    elif [[ $RW_ROLE == node ]]; then required=$((required+128)); fi
+    (( available >= required )) || rw_die "Для новых контейнеров требуется $required MiB свободной RAM сверх действующих служб."
     while [[ ! -d $path ]]; do path=$(dirname -- "$path"); done
     free=$(df -PB1 "$path" | awk 'NR==2 {print $4}')
     required=$(jq -r '(.resources|.image_gib+.data_gib+.restore_gib+.reserve_gib) * 1073741824 | ceil' "$RW_CFG")
@@ -587,7 +1082,7 @@ rw_port_checks() {
             for pids in $socket_pids; do
                 if ! grep -qx "$pids" "$RW_TMP/owned-pids"; then
                     publication=0
-                    if [[ $name == panel_api || $name == metrics || $name == subscription_api ]]; then
+                    if [[ $name == panel_api || $name == metrics || $name == subscription_api || $name == stats_api ]]; then
                         for id in $owned_ids; do
                             docker inspect --format '{{json .NetworkSettings.Ports}}' "$id" | jq -e --arg port "$port" 'to_entries | any(.[]|.value[]?; .HostIp=="127.0.0.1" and .HostPort==$port)' >/dev/null && publication=1
                         done
@@ -596,7 +1091,7 @@ rw_port_checks() {
                 fi
             done
         done < <(ss -H -lntp | awk -v p="$port" '$4 ~ (":" p "$") {print}')
-    done < <(jq -r '.ports|to_entries[]|[.key,.value]|@tsv' "$RW_CFG")
+    done < <(jq -r '.ports|to_entries[]|[.key,.value]|@tsv' "$RW_CFG"; if rw_stats_enabled; then printf 'stats_api\t%s\n' "$(rw_stats_port)"; fi)
     # Docker NAT publications can exist without a listening docker-proxy process.
     while IFS= read -r id; do
         [[ -n $id ]] || continue
@@ -793,7 +1288,7 @@ rw_firewall() {
         fi
         printf '}\n'
         if [[ $RW_ROLE != node ]]; then
-            printf ' chain forward { type filter hook forward priority -5; policy accept;\n ip daddr %s ip saddr != %s tcp dport { 3000, 3001, 3010, 5432, 6379 } drop\n }\n' "$RW_SUBNET" "$RW_SUBNET"
+            printf ' chain forward { type filter hook forward priority -5; policy accept;\n ip daddr %s ip saddr != %s tcp dport { 3000, 3001, 3010, 5432, 6379, 13100 } drop\n }\n' "$RW_SUBNET" "$RW_SUBNET"
         fi
         printf '}\n'
     } | rw_atomic "$rules"
@@ -1175,6 +1670,10 @@ rw_backup_open() {
         [[ -f $source/$path && $(sha256sum "$source/$path" | cut -d' ' -f1) == "$sum" ]] || rw_die "Повреждён файл backup: $path"
     done < <(jq -r '.managed_files[]|[.path,.sha256]|@tsv' "$source/manifest.json")
     rw_versions_check "$source/versions.lock.json"
+    if jq -e '.stats.enabled==true' "$source/manifest.json" >/dev/null; then
+        rw_stats_secrets_check "$source/private/stats.json" "$(jq -r '.api_namespace_owner // .ownership_label' "$source/manifest.json")"
+        jq -e '.stats.schema_version==1 and (.stats.port|type=="number" and .==floor and .>=1024 and .<=65535)' "$source/manifest.json" >/dev/null || rw_die 'Несовместимый stats manifest.'
+    fi
     jq -e '
       ([.app_secret,.postgres_password,.metrics_password,.webhook_secret,.auth_password]|all(type=="string" and test("^[a-f0-9]{64}$"))) and
       (.admin_password|type=="string" and test("^Aa1[a-f0-9]{64}$")) and
@@ -1209,7 +1708,7 @@ rw_restore_files() {
     else [[ ! -d $RW_OUT || -z $(find "$RW_OUT" -mindepth 1 -maxdepth 1 -print -quit) ]] || rw_die 'Каталог восстановления не пуст.'; fi
     rw_lock; RW_MUTATING=1
     while IFS= read -r path; do
-        [[ $path != rwctl && $path != compose.json && $path != config.json && $path != private/.managed-paths && $path != private/ssh-* ]] || continue
+        [[ $path != rwctl && $path != compose.json && $path != config.json && $path != private/.managed-paths && $path != private/ssh-* && $path != plugins/stats/* && $path != private/stats.env && $path != private/stats.token ]] || continue
         cat "$source/$path" | rw_atomic "$RW_OUT/$path"
     done < <(jq -r '.managed_files[].path' "$source/manifest.json")
     # Never execute archived shell code or trust an archived Compose with host mounts.
@@ -1221,7 +1720,7 @@ rw_restore_files() {
         [[ -s $token ]] && grep -qxE '[A-Za-z0-9._=+/-]+' "$token" || rw_die 'Нет проверенного API-токена подписок в backup.'
         { printf 'APP_PORT=3010\nREMNAWAVE_PANEL_URL=http://rw_panel:3000\nREMNAWAVE_API_TOKEN='; cat "$token"; printf '\nTRUST_PROXY=1\n'; } | rw_atomic "$RW_OUT/private/subscription.env"
     fi
-    rw_render_compose; rw_render_env; rw_render_caddy; rw_install_ctl
+    rw_render_compose; rw_render_env; rw_render_caddy; rw_stats_assets; rw_install_ctl
     rw_track_files
 }
 rw_stop_writers() {
@@ -1246,17 +1745,20 @@ rw_restore_data() {
         [[ -s $backup/database.dump ]] || rw_die 'Нет dump PostgreSQL.'
         rw_compose up -d --wait --wait-timeout 180 rw_db rw_valkey || rw_die 'База/кеш восстановления не запустились.'
         rw_compose exec -T rw_db pg_restore --list < "$backup/database.dump" >/dev/null || rw_die 'Невалидный PostgreSQL dump.'
+        rw_stats_roles
         # pg_restore --clean alone leaves objects introduced by a failed migration.
         # Writers are stopped; replace only this installation's database completely.
         rw_compose exec -T rw_db dropdb --if-exists --force -U postgres remnawave || rw_die 'Не удалось пересоздать собственную БД.'
         rw_compose exec -T rw_db createdb -U postgres -T template0 remnawave || rw_die 'Не удалось создать БД восстановления.'
         rw_compose exec -T rw_db pg_restore --exit-on-error --single-transaction -U postgres -d remnawave < "$backup/database.dump" || rw_die 'Восстановление PostgreSQL не завершилось.'
+        rw_stats_sql
     fi
 }
 rw_start_existing() {
     if [[ $RW_ROLE != node ]]; then rw_compose up -d --wait --wait-timeout 180 rw_db rw_valkey rw_panel || rw_die 'Панель не прошла запуск.'; rw_wait_panel; rw_panel_login; fi
     rw_compose --profile public up -d rw_caddy || rw_die 'Caddy не запустился.'
     if [[ $RW_ROLE != node ]]; then rw_compose --profile public up -d rw_subscription || rw_die 'Подписки не запустились.'; fi
+    if rw_stats_enabled; then rw_compose --profile public up -d --wait --wait-timeout 90 rw_stats || rw_die 'Stats API не запустился.'; fi
     if [[ $RW_ROLE != panel ]] && grep -q '^SECRET_KEY=' "$RW_OUT/private/node.env"; then rw_compose --profile node up -d rw_node || rw_die 'Нода не запустилась.'; fi
     rw_doctor
 }
@@ -1266,9 +1768,13 @@ rw_restore() {
     if (( RW_DRY_RUN )); then
         jq -n --arg e "$RW_ENV" --arg dir "$RW_OUT" --arg sha "$RW_BACKUP_SHA" '{environment_id:$e,directory:$dir,archive_sha256:$sha,archive_verified:true,read_only:true}'; return
     fi
-    rw_root; rw_os; rw_deps; rw_docker_install; rw_preflight
+    rw_root; rw_os; rw_deps; rw_docker_install
+    RW_STATS_SOURCE_MANIFEST=$RW_BACKUP/installation/manifest.json
+    rw_preflight
+    RW_STATS_SOURCE_MANIFEST=
     rw_restore_files
     rw_compose --profile public --profile node pull
+    rw_stats_patch
     rw_stop_writers; rw_restore_data "$RW_BACKUP"
     rw_firewall; rw_existing_caddy_apply
     rw_start_existing
@@ -1299,11 +1805,21 @@ rw_upgrade_activate() {
 rw_upgrade_rollback() {
     local source=$RW_UPGRADE_SOURCE path
     rw_stop_writers
+    # A failed addon activation may have introduced a service absent from the snapshot.
+    if ! jq -e '.stats.enabled==true' "$source/manifest.json" >/dev/null; then
+        local id
+        while IFS= read -r id; do
+            [[ -n $id ]] || continue
+            [[ $(docker inspect --format '{{index .Config.Labels "io.pdm.remnawave.installation"}}' "$id") == "$RW_OWNER" ]] || rw_die 'Чужой stats container при откате.'
+            docker rm -f "$id" >/dev/null
+        done < <(docker ps -aq --filter "label=io.pdm.remnawave.installation=$RW_OWNER" --filter label=com.docker.compose.service=rw_stats)
+    fi
     while IFS= read -r path; do
         [[ $path != rwctl && $path != private/.managed-paths ]] || continue
         cat "$source/$path" | rw_atomic "$RW_OUT/$path" || rw_die 'Не удалось вернуть файл отката.'
     done < <(jq -r '.managed_files[].path' "$source/manifest.json")
     cat "$source/manifest.json" | rw_atomic "$RW_OUT/manifest.json"
+    rw_stats_assets; rw_stats_patch
     rw_restore_data "${source%/installation}"
     rw_start_existing
     rw_install_ctl
@@ -1389,6 +1905,130 @@ rw_rollback() {
         rw_manifest_set '.status="rollback-needs-attention"'
         rw_die "Откат не завершён. Снимок до операции: $safety"
     fi
+}
+# shellcheck shell=bash
+rw_stats_enabled() { [[ -f ${RW_STATS_SOURCE_MANIFEST:-$RW_OUT/manifest.json} ]] && jq -e '.stats.enabled==true' "${RW_STATS_SOURCE_MANIFEST:-$RW_OUT/manifest.json}" >/dev/null; }
+rw_stats_port() { jq -er '.stats.port|select(type=="number" and .==floor and .>=1024 and .<=65535)' "${RW_STATS_SOURCE_MANIFEST:-$RW_OUT/manifest.json}"; }
+rw_stats_version() {
+    [[ $RW_ROLE != node && $(jq -r '.components.panel.image' "$1") == remnawave/backend@sha256:b16d724b90fd7c9fec2df04bd28938a671cafc62894105068e11550ee3449c56 ]] || rw_die 'Stats addon требует проверенный Panel 3.4.5 и роль панели.'
+}
+rw_stats_secrets_check() {
+    local file=$1 owner=$2
+    jq -e --arg owner "$owner" '
+      .schema_version==1 and .api_namespace_owner==$owner and
+      (keys==["api_namespace_owner","api_token","reader_password","schema_version"]) and
+      ([.api_token,.reader_password,.api_namespace_owner]|all(type=="string" and test("^[a-f0-9]{64}$")))' "$file" >/dev/null || rw_die 'Некорректные секреты/namespace stats addon.'
+}
+rw_stats_assets() {
+    rw_stats_enabled || return 0
+    rw_stats_version "$RW_OUT/versions.lock.json"
+    local namespace
+    namespace=$(jq -r '.api_namespace_owner // .ownership_label' "$RW_OUT/manifest.json")
+    rw_stats_secrets_check "$RW_OUT/private/stats.json" "$namespace"
+    rw_stats_hook | rw_atomic "$RW_OUT/plugins/stats/panel-hook.cjs"
+    rw_stats_server | rw_atomic "$RW_OUT/plugins/stats/server.cjs"
+    jq -r .api_token "$RW_OUT/private/stats.json" | rw_atomic "$RW_OUT/private/stats.token"
+    jq -r '"DATABASE_URL=postgresql://pdm_stats_api:"+.reader_password+"@rw_db:5432/remnawave?connection_limit=1&pool_timeout=2\nPDM_STATS_TOKEN_FILE=/run/secrets/stats-token\nPDM_STATS_PORT=13100\nNODE_OPTIONS=--max-old-space-size=32"' "$RW_OUT/private/stats.json" | rw_atomic "$RW_OUT/private/stats.env"
+}
+rw_stats_compose() {
+    local target=$1 versions=$2
+    rw_stats_enabled || return 0
+    rw_stats_version "$versions"
+    local port image
+    port=$(rw_stats_port) || rw_die 'Некорректный stats port.'
+    [[ $(jq -r --argjson port "$port" '.ports|[.[]]|index($port)' "$RW_CFG") == null ]] || rw_die 'Stats port совпадает с основным портом.'
+    image=$(jq -r '.components.panel.image' "$versions")
+    jq --arg image "$image" --arg owner "$RW_OWNER" --argjson port "$port" --arg profile "$(rw_cfg '.resources.profile')" '
+      (if $profile=="compact-test" then .services.rw_panel.environment.NODE_OPTIONS="--max-old-space-size=160" else . end) |
+      .services.rw_panel.volumes += ["./plugins/stats/processors.patched.js:/opt/app/dist/processors.js:ro","./plugins/stats/panel-hook.cjs:/opt/pdm-stats/panel-hook.cjs:ro"] |
+      .services.rw_stats={image:$image,entrypoint:["node","/opt/pdm-stats/server.cjs"],restart:"unless-stopped",
+        mem_limit:100663296,memswap_limit:100663296,cpus:0.15,read_only:true,cap_drop:["ALL"],
+        security_opt:["no-new-privileges:true"],tmpfs:["/tmp:size=32m,mode=1777"],
+        env_file:[{path:"private/stats.env",format:"raw"}],profiles:["public"],ports:[("127.0.0.1:"+($port|tostring)+":13100")],
+        volumes:["./plugins/stats/server.cjs:/opt/pdm-stats/server.cjs:ro","./private/stats.token:/run/secrets/stats-token:ro"],
+        labels:{"io.pdm.remnawave.installation":$owner},logging:{driver:"json-file",options:{"max-size":"5m","max-file":"2"}},
+        depends_on:{rw_db:{condition:"service_healthy"}},
+        healthcheck:{test:["CMD","node","-e","const fs=require(\"fs\"),http=require(\"http\");const r=http.get(\"http://127.0.0.1:13100/health\",{headers:{Authorization:\"Bearer \"+fs.readFileSync(process.env.PDM_STATS_TOKEN_FILE,\"utf8\").trim()}},s=>process.exit(s.statusCode===200?0:1));r.setTimeout(2500,()=>process.exit(1));r.on(\"error\",()=>process.exit(1));"],interval:"10s",timeout:"3s",retries:12,start_period:"20s"}}' "$target" | rw_atomic "$target"
+}
+rw_stats_patch() {
+    rw_stats_enabled || return 0
+    rw_stats_version "$RW_OUT/versions.lock.json"
+    local image
+    image=$(jq -r '.components.panel.image' "$RW_OUT/versions.lock.json")
+    rw_stats_patcher > "$RW_TMP/stats-patcher.cjs"
+    docker run --rm --network none --read-only --cap-drop ALL --entrypoint cat "$image" /opt/app/dist/processors.js > "$RW_TMP/processors.original.js"
+    docker run --rm --network none --memory 256m --memory-swap 256m --cpus 0.5 --cap-drop ALL --entrypoint node \
+      --mount "type=bind,src=$RW_TMP,dst=/work" "$image" /work/stats-patcher.cjs /work/processors.original.js /work/processors.patched.js || rw_die 'Stats bundle не прошёл SHA/syntax проверку.'
+    rw_atomic "$RW_OUT/plugins/stats/processors.patched.js" < "$RW_TMP/processors.patched.js"
+}
+rw_stats_roles() {
+    rw_stats_enabled || return 0
+    local namespace exists comment password
+    namespace=$(jq -r '.api_namespace_owner // .ownership_label' "$RW_OUT/manifest.json")
+    rw_stats_secrets_check "$RW_OUT/private/stats.json" "$namespace"
+    IFS='|' read -r exists comment < <(rw_compose exec -T rw_db psql -At -U postgres -d postgres -c "SELECT EXISTS(SELECT 1 FROM pg_roles WHERE rolname='pdm_stats_api'),coalesce((SELECT shobj_description(oid,'pg_authid') FROM pg_roles WHERE rolname='pdm_stats_api'),'');")
+    [[ $exists == f || ( $exists == t && $comment == "pdm-remnawave:$namespace" ) ]] || rw_die 'PostgreSQL role pdm_stats_api не принадлежит этому addon.'
+    password=$(jq -r .reader_password "$RW_OUT/private/stats.json")
+    {
+        if [[ $exists == f ]]; then printf "CREATE ROLE pdm_stats_api LOGIN PASSWORD '%s';\n" "$password";
+        else printf "ALTER ROLE pdm_stats_api PASSWORD '%s';\n" "$password"; fi
+        printf "COMMENT ON ROLE pdm_stats_api IS 'pdm-remnawave:%s';\n" "$namespace"
+        printf 'ALTER ROLE pdm_stats_api NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;\nALTER ROLE pdm_stats_api SET default_transaction_read_only=on;\n'
+    } | rw_compose exec -T rw_db psql -q -v ON_ERROR_STOP=1 -U postgres -d postgres || rw_die 'Роль stats не подготовлена.'
+}
+rw_stats_sql() {
+    rw_stats_enabled || return 0
+    rw_stats_schema | rw_compose exec -T rw_db psql -q -v ON_ERROR_STOP=1 -U postgres -d remnawave || rw_die 'Schema stats не прошла проверку.'
+    printf 'GRANT CONNECT ON DATABASE remnawave TO pdm_stats_api;\nGRANT USAGE ON SCHEMA pdm_stats TO pdm_stats_api;\nREVOKE ALL ON ALL TABLES IN SCHEMA public,pdm_stats FROM pdm_stats_api;\nGRANT EXECUTE ON FUNCTION pdm_stats.status(),pdm_stats.usage(bigint,timestamptz,timestamptz) TO pdm_stats_api;\n' | rw_compose exec -T rw_db psql -q -v ON_ERROR_STOP=1 -U postgres -d remnawave || rw_die 'Права stats API не настроены.'
+}
+rw_stats_status() {
+    rw_owned; rw_stats_enabled || rw_die 'Stats addon ещё не установлен.'
+    rw_auth_header "$RW_OUT/private/stats.token"
+    curl -fsS --connect-timeout 3 --max-time 10 --config "$RW_AUTH_CONF" "http://127.0.0.1:$(rw_stats_port)/health" | jq .
+}
+rw_stats_install() {
+    rw_root; rw_os; rw_owned; rw_verify_files; rw_ssh_idle; rw_docker_ownership
+    rw_stats_version "$RW_OUT/versions.lock.json"
+    local port=${RW_STATS_PORT:-} namespace
+    if rw_stats_enabled; then
+        [[ -z $port || $port == "$(rw_stats_port)" ]] || rw_die 'Сохранённый stats port не меняется повторной установкой.'
+        port=$(rw_stats_port)
+    else
+        port=${port:-13100}
+        [[ $port =~ ^[1-9][0-9]{3,4}$ ]] && ((port>=1024 && port<=65535)) || rw_die 'Stats port: 1024..65535, без ведущих нулей.'
+        [[ -z $(ss -H -lnt "sport = :$port") ]] || rw_die 'Stats port занят.'
+    fi
+    [[ $(jq -r --argjson port "$port" '.ports|[.[]]|index($port)' "$RW_CFG") == null ]] || rw_die 'Stats port совпадает с основным портом.'
+    if (( RW_DRY_RUN )); then jq -n --argjson port "$port" '{stats_schema:1,loopback_port:$port,read_only_api:true,no_additional_xray_queries:true,backup_required:true,read_only:true}'; return; fi
+    rw_lock
+    local available required=384
+    available=$(awk '/MemAvailable:/ {print int($2/1024)}' /proc/meminfo)
+    if ! rw_stats_enabled; then required=$((required+96)); fi
+    (( available>=required )) || rw_die "Для stats/проверки bundle требуется $required MiB свободной RAM."
+    namespace=$(jq -r '.api_namespace_owner // .ownership_label' "$RW_OUT/manifest.json")
+    RW_ARCHIVE=${RW_ARCHIVE:-/var/backups/pdm-remnawave/$RW_ENV-pre-stats-$(date -u +%Y%m%dT%H%M%SZ).tgz}
+    rw_stop_writers
+    if ! (rw_backup); then (rw_start_existing) || true; rw_die 'Backup перед stats не создан.'; fi
+    rw_backup_open "$RW_ARCHIVE"
+    RW_UPGRADE_SOURCE=$RW_BACKUP/installation; RW_UPGRADE_ARCHIVE=$RW_ARCHIVE; RW_UPGRADE_PENDING=1; RW_MUTATING=1
+    if (rw_stats_activate "$port" "$namespace" > "$RW_TMP/stats-install.log" 2>&1); then
+        RW_UPGRADE_PENDING=0; rw_install_ctl; rw_track_files
+        rw_info 'Stats addon установлен. История до первой подтверждённой выборки остаётся неизвестной.'
+    else
+        rw_atomic "$RW_OUT/private/stats-install-error.log" < "$RW_TMP/stats-install.log"
+        rw_upgrade_abort
+        rw_die 'Stats addon не прошёл приёмку; выполнен откат.'
+    fi
+}
+rw_stats_activate() {
+    local port=$1 namespace=$2
+    rw_manifest_set '.stats={enabled:true,schema_version:1,port:$port}' --argjson port "$port"
+    if [[ ! -f $RW_OUT/private/stats.json ]]; then
+        jq -n --arg namespace "$namespace" --arg password "$(openssl rand -hex 32)" --arg token "$(openssl rand -hex 32)" \
+          '{schema_version:1,api_namespace_owner:$namespace,reader_password:$password,api_token:$token}' | rw_atomic "$RW_OUT/private/stats.json"
+    fi
+    rw_stats_assets; rw_stats_patch; rw_render_compose; rw_stats_roles; rw_stats_sql; rw_firewall; rw_track_files
+    rw_start_existing; rw_stats_status
 }
 # shellcheck shell=bash
 rw_ssh_idle() {
@@ -1620,8 +2260,14 @@ rw_interactive() {
     fi
     read -r -p 'ID окружения (например fi-test): ' env
     read -r -p 'Режим сети clean / fi-parallel [clean]: ' mode; mode=${mode:-clean}
-    if [[ $role != node ]]; then read -r -p 'Домен панели: ' panel; read -r -p 'Домен подписок: ' sub; read -r -p 'Логин администратора: ' user; read -r -p 'Email администратора: ' email; fi
-    if [[ $role != panel ]]; then read -r -p 'Домен ноды: ' node; fi
+    if [[ $role != node ]]; then
+        read -r -p 'Домен панели: ' panel
+        read -r -p "Домен подписок [$panel]: " sub; sub=${sub:-$panel}
+        read -r -p 'Логин администратора: ' user; read -r -p 'Email администратора: ' email
+    fi
+    if [[ $role != panel ]]; then
+        read -r -p "Домен ноды${panel:+ [$panel]}: " node; node=${node:-$panel}
+    fi
     read -r -p 'Публичные IPv4/IPv6 через запятую: ' ips
     [[ $role != node ]] || read -r -p 'IP панели для управления через запятую: ' sources
     jq -n --arg role "$role" --arg env "$env" --arg mode "$mode" --arg panel "$panel" --arg sub "$sub" --arg node "$node" --arg ips "$ips" --arg sources "$sources" --arg user "$user" --arg email "$email" \
@@ -1643,6 +2289,8 @@ Remnawave — Linux/Bash/Docker Compose. На VPS Python не нужен.
   rwctl ssh prepare --admin-user USER --public-key FILE --output DIR
   rwctl ssh harden --config FILE --output SERVER_DIR --ssh USER@HOST
   rwctl tls-test [--test-http-port 18082] [--test-https-port 19447] [--dry-run]
+  rwctl stats install [--stats-port 13100] [--archive BACKUP_FILE] [--dry-run]
+  rwctl stats status
   rwctl node attach --config PANEL_FILE --output PANEL_DIR --ssh USER@HOST --node-config NODE_FILE
 Удаление:
   uninstall.sh --output DIR [--dry-run] [--purge] [--yes]
@@ -1658,7 +2306,7 @@ rw_plan() {
 rw_main() {
     local entry=$1 command
     shift; rw_linux
-    RW_CONFIG=; RW_OUT=; RW_CONNECTION=; RW_DRY_RUN=0; RW_YES=0; RW_PURGE=0; RW_PREPARED_ONLY=0; RW_ROLE_ARG=; RW_ARCHIVE=; RW_SSH=; RW_NODE_CONFIG=; RW_VERSION_FILE=; RW_SSH_ADMIN=; RW_SSH_PUBLIC_KEY=; RW_SSH_NONCE=; RW_TLS_HTTP=; RW_TLS_HTTPS=
+    RW_CONFIG=; RW_OUT=; RW_CONNECTION=; RW_DRY_RUN=0; RW_YES=0; RW_PURGE=0; RW_PREPARED_ONLY=0; RW_ROLE_ARG=; RW_ARCHIVE=; RW_SSH=; RW_NODE_CONFIG=; RW_VERSION_FILE=; RW_SSH_ADMIN=; RW_SSH_PUBLIC_KEY=; RW_SSH_NONCE=; RW_TLS_HTTP=; RW_TLS_HTTPS=; RW_STATS_PORT=; RW_STATS_SOURCE_MANIFEST=
     if [[ $entry == ctl ]]; then
         command=${1:-help}; (( $#==0 )) || shift
         [[ $command != --help && $command != -h ]] || command=help
@@ -1671,6 +2319,10 @@ rw_main() {
     fi
     if [[ $command == ssh ]]; then
         case ${1:-} in prepare|harden|status|commit|confirm|revert) command=ssh-$1;; *) rw_die 'ssh: prepare или harden.';; esac
+        shift
+    fi
+    if [[ $command == stats ]]; then
+        case ${1:-} in install|status) command=stats-$1;; *) rw_die 'stats: install или status.';; esac
         shift
     fi
     while (( $# )); do
@@ -1687,6 +2339,7 @@ rw_main() {
           --nonce) [[ $# -ge 2 ]] || rw_die 'Нужен nonce.'; RW_SSH_NONCE=$2; shift;;
           --test-http-port) [[ $# -ge 2 ]] || rw_die 'Нужен PORT.'; RW_TLS_HTTP=$2; shift;;
           --test-https-port) [[ $# -ge 2 ]] || rw_die 'Нужен PORT.'; RW_TLS_HTTPS=$2; shift;;
+          --stats-port) [[ $# -ge 2 ]] || rw_die 'Нужен PORT.'; RW_STATS_PORT=$2; shift;;
           --ssh) [[ $# -ge 2 ]] || rw_die 'Нужен HOST.'; RW_SSH=$2; shift;;
           --node-config) [[ $# -ge 2 ]] || rw_die 'Нужен FILE.'; RW_NODE_CONFIG=$2; shift;;
           --dry-run) RW_DRY_RUN=1;; --yes) RW_YES=1;; --purge) RW_PURGE=1;; --prepared-only) RW_PREPARED_ONLY=1;;
@@ -1728,6 +2381,8 @@ rw_main() {
       ssh-confirm) rw_ssh_confirm;;
       ssh-revert) rw_ssh_revert;;
       tls-test) rw_tls_test;;
+      stats-install) rw_stats_install;;
+      stats-status) rw_stats_status;;
       uninstall) rw_uninstall;;
       *) rw_die "Неизвестная команда $command.";;
     esac

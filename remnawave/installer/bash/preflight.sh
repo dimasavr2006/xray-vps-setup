@@ -1,20 +1,34 @@
 # shellcheck shell=bash
 rw_resource_checks() {
-    local total available free required minram mincpu cpus image cached=0 path=$RW_OUT
+    local total available free required minram mincpu cpus image cached=0 path=$RW_OUT id limits credit=0
     total=$(awk '/MemTotal:/ {print int($2/1024)}' /proc/meminfo)
     available=$(awk '/MemAvailable:/ {print int($2/1024)}' /proc/meminfo)
     cpus=$(getconf _NPROCESSORS_ONLN)
     minram=1536; mincpu=1
     if [[ $(rw_cfg '.resources.purpose') == production ]]; then minram=4096; mincpu=2; fi
     (( total >= minram && cpus >= mincpu )) || rw_die 'Недостаточно RAM/CPU для выбранного назначения.'
-    if ! [[ -f $RW_OUT/manifest.json ]]; then
-        required=$(rw_memory_limits | jq --arg role "$RW_ROLE" 'if $role=="node" then .rw_caddy+.rw_node
-          elif $role=="panel" then del(.rw_node)|[.[]]|add else [.[]]|add end')
-        # Compact tests reserve host headroom as well as every container's hard limit.
-        if [[ $(rw_cfg '.resources.profile') == compact-test ]]; then required=$((required+128));
-        elif [[ $RW_ROLE == node ]]; then required=$((required+128)); fi
-        (( available >= required )) || rw_die "Для новых контейнеров требуется $required MiB свободной RAM сверх действующих служб."
+    limits=$(rw_memory_limits | jq --arg role "$RW_ROLE" 'if $role=="node" then {rw_caddy,rw_node}
+      elif $role=="panel" then del(.rw_node) else . end')
+    if rw_stats_enabled; then limits=$(jq '.rw_stats=96' <<< "$limits"); fi
+    required=$(jq '[.[]]|add' <<< "$limits")
+    # A prepared manifest has no running memory reservation. Credit only this
+    # installation's running containers, up to each requested hard limit.
+    if [[ -f $RW_OUT/manifest.json ]] && command -v docker >/dev/null 2>&1; then
+        while IFS= read -r id; do
+            [[ -n $id ]] || continue
+            credit=$(docker inspect "$id" | jq --arg owner "$RW_OWNER" --arg cfg "$RW_OUT/compose.json" --argjson limits "$limits" '
+              [.[0]|select(.State.Running and .Config.Labels["io.pdm.remnawave.installation"]==$owner
+              and .Config.Labels["com.docker.compose.project.config_files"]==$cfg) |
+              (.Config.Labels["com.docker.compose.service"]) as $s |
+              select($limits[$s]!=null and .HostConfig.Memory>0) |
+              [(.HostConfig.Memory/1048576|floor),$limits[$s]]|min]|add // 0')
+            required=$((required-credit))
+        done < <(docker ps -q --filter "label=io.pdm.remnawave.installation=$RW_OWNER")
     fi
+    # Compact tests reserve host headroom as well as every container's hard limit.
+    if [[ $(rw_cfg '.resources.profile') == compact-test ]]; then required=$((required+128));
+    elif [[ $RW_ROLE == node ]]; then required=$((required+128)); fi
+    (( available >= required )) || rw_die "Для новых контейнеров требуется $required MiB свободной RAM сверх действующих служб."
     while [[ ! -d $path ]]; do path=$(dirname -- "$path"); done
     free=$(df -PB1 "$path" | awk 'NR==2 {print $4}')
     required=$(jq -r '(.resources|.image_gib+.data_gib+.restore_gib+.reserve_gib) * 1073741824 | ceil' "$RW_CFG")
@@ -68,7 +82,7 @@ rw_port_checks() {
             for pids in $socket_pids; do
                 if ! grep -qx "$pids" "$RW_TMP/owned-pids"; then
                     publication=0
-                    if [[ $name == panel_api || $name == metrics || $name == subscription_api ]]; then
+                    if [[ $name == panel_api || $name == metrics || $name == subscription_api || $name == stats_api ]]; then
                         for id in $owned_ids; do
                             docker inspect --format '{{json .NetworkSettings.Ports}}' "$id" | jq -e --arg port "$port" 'to_entries | any(.[]|.value[]?; .HostIp=="127.0.0.1" and .HostPort==$port)' >/dev/null && publication=1
                         done
@@ -77,7 +91,7 @@ rw_port_checks() {
                 fi
             done
         done < <(ss -H -lntp | awk -v p="$port" '$4 ~ (":" p "$") {print}')
-    done < <(jq -r '.ports|to_entries[]|[.key,.value]|@tsv' "$RW_CFG")
+    done < <(jq -r '.ports|to_entries[]|[.key,.value]|@tsv' "$RW_CFG"; if rw_stats_enabled; then printf 'stats_api\t%s\n' "$(rw_stats_port)"; fi)
     # Docker NAT publications can exist without a listening docker-proxy process.
     while IFS= read -r id; do
         [[ -n $id ]] || continue

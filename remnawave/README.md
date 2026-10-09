@@ -25,6 +25,9 @@ bash /opt/pdm-remnawave/ENV/rwctl backup --archive /private-backups/ENV.tgz
 bash rwctl restore --archive /private-backups/ENV.tgz --output /opt/pdm-remnawave/ENV
 bash /opt/pdm-remnawave/ENV/rwctl upgrade --versions /private/versions.json
 bash /opt/pdm-remnawave/ENV/rwctl rollback --archive /private-backups/pre-upgrade.tgz
+bash /opt/pdm-remnawave/ENV/rwctl stats install --stats-port 13100 --dry-run
+bash /opt/pdm-remnawave/ENV/rwctl stats install --stats-port 13100
+bash /opt/pdm-remnawave/ENV/rwctl stats status
 ```
 
 Backup вместе с `.sha256` храните вне VPS. Restore сохраняет ключи/API-ID,
@@ -37,7 +40,9 @@ major PostgreSQL меняется отдельной миграцией. Уда�
 внешние HTTPS/TCP Reality/XHTTP, публичные подписки, повтор, staging TLS;
 три роли на чистом Debian 13 WSL с native Docker, SSH/sudo attachment,
 реальные клиенты отдельной ноды, IPv4/IPv6 firewall и полный CLI
-backup/purge/restore/upgrade/rollback. Проходят 41 + 9 Bash-проверок и
+backup/purge/restore/upgrade/rollback. Stats addon также прошёл восстановление,
+обновление, откат и отказ с возвратом прежнего стека; работает на FI.
+Проходят 43 + 9 + 7 Bash-проверок и
 реальный запуск через wget/process substitution.
 
 Комплект остаётся тестовым: 48 часов FI-наблюдения заканчиваются
@@ -47,5 +52,6 @@ DNS остаётся отдельной приёмкой; WSL её полнос�
 Корневые скрипты данного репозитория по-прежнему устанавливают Marzneshin.
 
 Исходники и закреплённые образы: [installer](installer).
+Интервальная статистика: [stats](stats).
 Проверки: [tests](tests). Сборка: `bash installer/build-entrypoints.sh`;
 проверка актуальности: `bash installer/build-entrypoints.sh --check`.

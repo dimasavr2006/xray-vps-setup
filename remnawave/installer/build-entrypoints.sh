@@ -11,7 +11,14 @@ build() {
     printf '%s\n' 'RW_AUTH_GLOBAL' '}' 'rw_config_filter() {' "cat <<'RW_CONFIG_JQ'"
     cat "$ROOT/installer/bash/config.jq"
     printf '%s\n' 'RW_CONFIG_JQ' '}'
-    for file in common render preflight deploy maintenance recovery upgrade ssh tls cli; do cat "$ROOT/installer/bash/$file.sh"; done
+    for spec in 'schema.sql:schema' 'panel-hook.cjs:hook' 'server.cjs:server' 'patch-panel.cjs:patcher'; do
+        file=${spec%:*}; fn=${spec#*:}
+        printf 'rw_stats_%s() {\n' "$fn"
+        printf "cat <<'RW_STATS_PAYLOAD'\n"
+        cat "$ROOT/stats/$file"
+        printf '\nRW_STATS_PAYLOAD\n}\n'
+    done
+    for file in common render preflight deploy maintenance recovery upgrade stats ssh tls cli; do cat "$ROOT/installer/bash/$file.sh"; done
     printf '\nrw_main %s "$@"\n' "$command"
 }
 for spec in 'rw-setup.sh:setup' 'uninstall.sh:uninstall' 'rwctl:ctl'; do
