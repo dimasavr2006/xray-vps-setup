@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
   "date": "2026-10-10",
-  "status": "acceptance passed; publication/raw verification and final cleanup pending",
+  "status": "complete",
   "baseline_code_commit": "def8ba3b28386b4ccaf17c99389d961224492373",
   "baseline_published_head": "93f021e",
-  "published": false,
+  "published": true,
   "fi_modified": "CLI only; runtime not redeployed",
   "deterministic_build_canonical_and_public_mirror": "pass",
   "shellcheck_warning_level": "pass",
@@ -50,21 +50,20 @@
     "legacy_and_cover_trusted_https": true
   },
   "cleanup": {
-    "owned_containers_volumes_networks_removed": "final inventory pending",
-    "synthetic_backups_removed": false,
-    "wsl_stopped": false,
-    "base_system_and_image_cache_retained": true
+    "owned_containers_volumes_networks_removed": true,
+    "optimization_synthetic_backups_removed": true,
+    "wsl_stopped": true,
+    "base_system_and_image_cache_retained": true,
+    "unrelated_docker_desktop_not_stopped": true
   },
-  "pending": [
-    "public mirror/release audit and publication",
-    "actual published raw byte comparison/process substitution",
-    "owned CI backup/fixture cleanup and stop own WSL"
-  ],
+  "pending": [],
   "limitations": [
     "Fresh-install timing ranges overlap; three alternating pairs are descriptive, not a speed guarantee.",
     "APT/Docker preinstalled and reserved DNS/internal TLS in timing fixtures; clean provider VPS public DNS/ACME and external global IPv6 remain open.",
     "Current production pins unchanged; only previously reviewed PostgreSQL 18.3/18.4 pair tested, no newer upstream image certification.",
     "Memory peaks are individual lifetime peaks, not simultaneous total RAM or production-load evidence.",
     "Full passive 48-hour observation was stopped by owner; no recurring observation or automatic updates created."
-  ]
+  ],
+  "github_code_commit": "dca6009bfe1fe2adfa619192c19752a434b3acbd",
+  "published_raw": "pass; three raw entrypoints byte-match canonical; actual wget/process-substitution preview and owned prepared uninstall"
 }

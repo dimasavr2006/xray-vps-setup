@@ -41,7 +41,7 @@
     "actual_wget_process_substitution_and_owned_uninstall": "pass",
     "fi_english_ctl_confluence_and_real_ip_dns": "pass: real TLS, unchanged secrets, all container start times preserved",
     "fi_offhost_backup_checksum": "pass",
-    "published_raw_files_and_process_substitution": "pending for optimization release; previous host-security release passed",
+    "published_raw_files_and_process_substitution": "pass; three raw entrypoints byte-match canonical; actual wget/process-substitution preview and owned prepared uninstall",
     "fi_external_trusted_cover_https": "pass",
     "installation_summary_three_roles_shared_ports_and_ipv6": "pass",
     "passwords_shown_in_real_terminal_and_hidden_in_redirected_output": "pass: setup summary and explicit info --show-secrets; redirected --show-secrets rejected",
@@ -130,7 +130,8 @@
     "synthetic_ci_modern_backups_removed": true,
     "owned_wsl_distro_stopped": true,
     "base_debian_and_image_cache_retained": true,
-    "security_namespaces_and_temporary_ssh_servers_removed": true
+    "security_namespaces_and_temporary_ssh_servers_removed": true,
+    "optimization_fixtures_removed": true
   },
   "limits": [
     "Current pinned images were recreated; this does not certify a newer upstream release.",
@@ -139,6 +140,6 @@
     "Full passive 48-hour observation was stopped by owner; no recurring checks or update watchers were started.",
     "Statistics compatibility must be verified before changing a panel digest."
   ],
-  "github_code_commit": "def8ba3b28386b4ccaf17c99389d961224492373",
+  "github_code_commit": "dca6009bfe1fe2adfa619192c19752a434b3acbd",
   "optimization_evidence": "verification.optimization.json"
 }
