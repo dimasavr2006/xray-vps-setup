@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "date": "2026-10-09",
-  "scope": "English installer, confirmed IP discovery, Confluence cover, component updates and installation access card; default UFW and conditional root public key",
+  "date": "2026-10-10",
+  "scope": "English installer, confirmed IP discovery, Confluence cover, component updates and installation access card; default UFW and conditional root public key; installer execution optimization and bounded readiness/pulls",
   "runtime": "Linux/Bash/Docker; no Python installer runtime",
   "bash_checks": {
     "main": 44,
@@ -10,9 +10,12 @@
     "interruption_wizard_mfa": 7,
     "tokens": 7,
     "wizard_cover_components": 11,
-    "total": 103,
+    "total": 129,
     "installation_summary": 8,
-    "host_security": 10
+    "host_security": 10,
+    "optimization": 12,
+    "removal": 8,
+    "deadlines": 6
   },
   "checks": {
     "english_runtime_and_templates": "pass",
@@ -38,7 +41,7 @@
     "actual_wget_process_substitution_and_owned_uninstall": "pass",
     "fi_english_ctl_confluence_and_real_ip_dns": "pass: real TLS, unchanged secrets, all container start times preserved",
     "fi_offhost_backup_checksum": "pass",
-    "published_raw_files_and_process_substitution": "pass: host-security release bytes match canonical source; actual wget preview and owned uninstall passed",
+    "published_raw_files_and_process_substitution": "pending for optimization release; previous host-security release passed",
     "fi_external_trusted_cover_https": "pass",
     "installation_summary_three_roles_shared_ports_and_ipv6": "pass",
     "passwords_shown_in_real_terminal_and_hidden_in_redirected_output": "pass: setup summary and explicit info --show-secrets; redirected --show-secrets rejected",
@@ -51,7 +54,9 @@
     "native_ufw_tcp_udp_ipv6_and_fresh_ssh": "pass: real network namespaces and SSH, unapproved new listeners blocked",
     "native_ufw_unconfirmed_activation_rollback": "pass: actual systemd watchdog; CI interval shortened to 20 seconds, production interval 300 seconds",
     "fi_ufw_enabled_confirmed_and_preserved_ports": "pass: all 15 TCP probe results unchanged; old/new trusted HTTPS; root authorized_keys and all container start times unchanged",
-    "fi_ufw_offhost_backup_checksum": "pass: fi-test-ufw-20261009T113416Z.tgz"
+    "fi_ufw_offhost_backup_checksum": "pass: fi-test-ufw-20261009T113416Z.tgz",
+    "optimization_role_maintenance_failure_acceptance": "pass; three alternating pairs, panel/node/combined, old prepared and parallel layout, PostgreSQL upgrade/rollback, legacy MFA/stats backup, real interruption/deadlines",
+    "fi_optimized_cli_promotion": "pass; all 13 container start times/restart counts, SSH/UFW/runtime files and owner TOTP unchanged; doctor/stats/trusted legacy+cover HTTPS; pre/post backups checksum-verified offhost"
   },
   "images": {
     "panel": "3.4.5",
@@ -134,5 +139,6 @@
     "Full passive 48-hour observation was stopped by owner; no recurring checks or update watchers were started.",
     "Statistics compatibility must be verified before changing a panel digest."
   ],
-  "github_code_commit": "def8ba3b28386b4ccaf17c99389d961224492373"
+  "github_code_commit": "def8ba3b28386b4ccaf17c99389d961224492373",
+  "optimization_evidence": "verification.optimization.json"
 }

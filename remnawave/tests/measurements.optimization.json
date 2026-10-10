@@ -1,0 +1,1044 @@
+{
+  "environment": "Debian 13 amd64 WSL, native Docker, cached fixed digests, internal TLS, reserved domain fixtures, compact-test container limits, host security disabled for timings",
+  "timings": {
+    "install": {
+      "baseline": {
+        "runs_ms": [
+          67639,
+          65497,
+          57846
+        ],
+        "median_ms": 65497,
+        "min_ms": 57846,
+        "max_ms": 67639
+      },
+      "optimized": {
+        "runs_ms": [
+          59956,
+          49471,
+          60901
+        ],
+        "median_ms": 59956,
+        "min_ms": 49471,
+        "max_ms": 60901
+      },
+      "median_reduction_percent": 8.46
+    },
+    "repeat_apply": {
+      "baseline": {
+        "runs_ms": [
+          12858,
+          12377,
+          11765
+        ],
+        "median_ms": 12377,
+        "min_ms": 11765,
+        "max_ms": 12858
+      },
+      "optimized": {
+        "runs_ms": [
+          7645,
+          6557,
+          8506
+        ],
+        "median_ms": 7645,
+        "min_ms": 6557,
+        "max_ms": 8506
+      },
+      "median_reduction_percent": 38.23
+    },
+    "doctor": {
+      "baseline": {
+        "runs_ms": [
+          2145,
+          2088,
+          2155
+        ],
+        "median_ms": 2145,
+        "min_ms": 2088,
+        "max_ms": 2155
+      },
+      "optimized": {
+        "runs_ms": [
+          725,
+          616,
+          739
+        ],
+        "median_ms": 725,
+        "min_ms": 616,
+        "max_ms": 739
+      },
+      "median_reduction_percent": 66.2
+    },
+    "node_upgrade": {
+      "baseline": {
+        "runs_ms": [
+          32528,
+          32181,
+          22475
+        ],
+        "median_ms": 32181,
+        "min_ms": 22475,
+        "max_ms": 32528
+      },
+      "optimized": {
+        "runs_ms": [
+          8051,
+          7811,
+          7994
+        ],
+        "median_ms": 7994,
+        "min_ms": 7811,
+        "max_ms": 8051
+      },
+      "median_reduction_percent": 75.16
+    },
+    "uninstall": {
+      "baseline": {
+        "runs_ms": [
+          8935,
+          9255,
+          9954
+        ],
+        "median_ms": 9255,
+        "min_ms": 8935,
+        "max_ms": 9954
+      },
+      "optimized": {
+        "runs_ms": [
+          5095,
+          4751,
+          4833
+        ],
+        "median_ms": 4833,
+        "min_ms": 4751,
+        "max_ms": 5095
+      },
+      "median_reduction_percent": 47.78
+    },
+    "subscription_upgrade": {
+      "optimized": {
+        "runs_ms": [
+          10417
+        ],
+        "median_ms": 10417,
+        "min_ms": 10417,
+        "max_ms": 10417
+      }
+    },
+    "restore": {
+      "optimized": {
+        "runs_ms": [
+          62980
+        ],
+        "median_ms": 62980,
+        "min_ms": 62980,
+        "max_ms": 62980
+      }
+    }
+  },
+  "command_name_wrapper_counts": {
+    "baseline": {
+      "matched_runs": [
+        2,
+        3
+      ],
+      "per_run": {
+        "2": {
+          "jq": 1169,
+          "sha256sum": 424,
+          "docker": 439,
+          "curl": 90
+        },
+        "3": {
+          "jq": 1151,
+          "sha256sum": 424,
+          "docker": 439,
+          "curl": 81
+        }
+      },
+      "median_counts": {
+        "docker": 439,
+        "jq": 1160,
+        "sha256sum": 424,
+        "curl": 85.5,
+        "dig": 0,
+        "apt-get": 0
+      }
+    },
+    "optimized": {
+      "matched_runs": [
+        2,
+        3
+      ],
+      "per_run": {
+        "2": {
+          "jq": 971,
+          "sha256sum": 314,
+          "docker": 160,
+          "curl": 78
+        },
+        "3": {
+          "jq": 975,
+          "sha256sum": 314,
+          "docker": 161,
+          "curl": 80
+        }
+      },
+      "median_counts": {
+        "docker": 160.5,
+        "jq": 973,
+        "sha256sum": 314,
+        "curl": 79,
+        "dig": 0,
+        "apt-get": 0
+      }
+    }
+  },
+  "nested_inclusive_stage_timings": {
+    "baseline": {
+      "install": {
+        "rw_resource_checks": {
+          "runs_ms": [
+            815,
+            790,
+            628
+          ],
+          "median_ms": 790
+        },
+        "rw_docker_install": {
+          "runs_ms": [
+            187,
+            132,
+            104
+          ],
+          "median_ms": 132
+        },
+        "rw_render": {
+          "runs_ms": [
+            1550,
+            1676,
+            1469
+          ],
+          "median_ms": 1550
+        },
+        "rw_track_files": {
+          "runs_ms": [
+            484,
+            449,
+            405
+          ],
+          "median_ms": 449
+        },
+        "rw_firewall": {
+          "runs_ms": [
+            627,
+            590,
+            518
+          ],
+          "median_ms": 590
+        },
+        "rw_wait_panel": {
+          "runs_ms": [
+            72,
+            60,
+            65
+          ],
+          "median_ms": 65
+        },
+        "rw_panel_login": {
+          "runs_ms": [
+            1268,
+            1197,
+            1193
+          ],
+          "median_ms": 1197
+        },
+        "rw_panel_tokens": {
+          "runs_ms": [
+            2303,
+            2206,
+            2163
+          ],
+          "median_ms": 2206
+        },
+        "rw_register_node": {
+          "runs_ms": [
+            1365,
+            1175,
+            1159
+          ],
+          "median_ms": 1175
+        },
+        "rw_doctor": {
+          "runs_ms": [
+            14404,
+            18393,
+            18337
+          ],
+          "median_ms": 18337
+        },
+        "rw_verify_files": {
+          "runs_ms": [
+            226,
+            215,
+            194
+          ],
+          "median_ms": 215
+        }
+      },
+      "repeat_apply": {
+        "rw_verify_files": {
+          "runs_ms": [
+            229,
+            218,
+            182
+          ],
+          "median_ms": 218
+        },
+        "rw_resource_checks": {
+          "runs_ms": [
+            1243,
+            1164,
+            1060
+          ],
+          "median_ms": 1164
+        },
+        "rw_docker_install": {
+          "runs_ms": [
+            152,
+            116,
+            106
+          ],
+          "median_ms": 116
+        },
+        "rw_firewall": {
+          "runs_ms": [
+            664,
+            619,
+            601
+          ],
+          "median_ms": 619
+        },
+        "rw_wait_panel": {
+          "runs_ms": [
+            45,
+            44,
+            43
+          ],
+          "median_ms": 44
+        },
+        "rw_panel_login": {
+          "runs_ms": [
+            389,
+            395,
+            365
+          ],
+          "median_ms": 389
+        },
+        "rw_panel_tokens": {
+          "runs_ms": [
+            175,
+            173,
+            161
+          ],
+          "median_ms": 173
+        },
+        "rw_register_node": {
+          "runs_ms": [
+            712,
+            666,
+            655
+          ],
+          "median_ms": 666
+        },
+        "rw_doctor": {
+          "runs_ms": [
+            2182,
+            2070,
+            1965
+          ],
+          "median_ms": 2070
+        },
+        "rw_track_files": {
+          "runs_ms": [
+            268,
+            267,
+            263
+          ],
+          "median_ms": 267
+        }
+      },
+      "doctor": {
+        "rw_wait_panel": {
+          "runs_ms": [
+            23,
+            21,
+            28
+          ],
+          "median_ms": 23
+        },
+        "rw_panel_login": {
+          "runs_ms": [
+            251,
+            242,
+            268
+          ],
+          "median_ms": 251
+        },
+        "rw_doctor": {
+          "runs_ms": [
+            2140,
+            2082,
+            2149
+          ],
+          "median_ms": 2140
+        }
+      },
+      "node_upgrade": {
+        "rw_verify_files": {
+          "runs_ms": [
+            650,
+            588,
+            758
+          ],
+          "median_ms": 650
+        },
+        "rw_resource_checks": {
+          "runs_ms": [
+            605,
+            590,
+            658
+          ],
+          "median_ms": 605
+        },
+        "rw_backup": {
+          "runs_ms": [
+            2002,
+            1945,
+            5083
+          ],
+          "median_ms": 2002
+        },
+        "rw_backup_open": {
+          "runs_ms": [
+            238,
+            240,
+            347
+          ],
+          "median_ms": 240
+        },
+        "rw_track_files": {
+          "runs_ms": [
+            531,
+            505,
+            705
+          ],
+          "median_ms": 531
+        },
+        "rw_wait_panel": {
+          "runs_ms": [
+            23,
+            30,
+            34
+          ],
+          "median_ms": 30
+        },
+        "rw_panel_login": {
+          "runs_ms": [
+            255,
+            242,
+            309
+          ],
+          "median_ms": 255
+        },
+        "rw_doctor": {
+          "runs_ms": [
+            20422,
+            20559,
+            3202
+          ],
+          "median_ms": 20422
+        }
+      },
+      "uninstall": {
+        "rw_verify_files": {
+          "runs_ms": [
+            405,
+            366,
+            526
+          ],
+          "median_ms": 405
+        }
+      }
+    },
+    "optimized": {
+      "install": {
+        "rw_resource_checks": {
+          "runs_ms": [
+            366,
+            319,
+            525
+          ],
+          "median_ms": 366
+        },
+        "rw_docker_install": {
+          "runs_ms": [
+            121,
+            112,
+            139
+          ],
+          "median_ms": 121
+        },
+        "rw_render": {
+          "runs_ms": [
+            1335,
+            1187,
+            1436
+          ],
+          "median_ms": 1335
+        },
+        "rw_firewall": {
+          "runs_ms": [
+            571,
+            503,
+            609
+          ],
+          "median_ms": 571
+        },
+        "rw_wait_panel": {
+          "runs_ms": [
+            63,
+            56,
+            73
+          ],
+          "median_ms": 63
+        },
+        "rw_panel_login": {
+          "runs_ms": [
+            967,
+            927,
+            1035
+          ],
+          "median_ms": 967
+        },
+        "rw_panel_tokens": {
+          "runs_ms": [
+            1902,
+            1846,
+            1697
+          ],
+          "median_ms": 1846
+        },
+        "rw_register_node": {
+          "runs_ms": [
+            1258,
+            980,
+            1146
+          ],
+          "median_ms": 1146
+        },
+        "rw_doctor": {
+          "runs_ms": [
+            18185,
+            13992,
+            18110
+          ],
+          "median_ms": 18110
+        },
+        "rw_track_files": {
+          "runs_ms": [
+            37,
+            30,
+            33
+          ],
+          "median_ms": 33
+        },
+        "rw_verify_files": {
+          "runs_ms": [
+            145,
+            146,
+            157
+          ],
+          "median_ms": 146
+        }
+      },
+      "repeat_apply": {
+        "rw_verify_files": {
+          "runs_ms": [
+            141,
+            122,
+            161
+          ],
+          "median_ms": 141
+        },
+        "rw_resource_checks": {
+          "runs_ms": [
+            584,
+            504,
+            828
+          ],
+          "median_ms": 584
+        },
+        "rw_docker_install": {
+          "runs_ms": [
+            123,
+            105,
+            173
+          ],
+          "median_ms": 123
+        },
+        "rw_firewall": {
+          "runs_ms": [
+            698,
+            574,
+            625
+          ],
+          "median_ms": 625
+        },
+        "rw_wait_panel": {
+          "runs_ms": [
+            60,
+            40,
+            51
+          ],
+          "median_ms": 51
+        },
+        "rw_panel_login": {
+          "runs_ms": [
+            277,
+            207,
+            289
+          ],
+          "median_ms": 277
+        },
+        "rw_panel_tokens": {
+          "runs_ms": [
+            180,
+            144,
+            190
+          ],
+          "median_ms": 180
+        },
+        "rw_register_node": {
+          "runs_ms": [
+            680,
+            575,
+            764
+          ],
+          "median_ms": 680
+        },
+        "rw_doctor": {
+          "runs_ms": [
+            734,
+            612,
+            880
+          ],
+          "median_ms": 734
+        },
+        "rw_track_files": {
+          "runs_ms": [
+            32,
+            30,
+            39
+          ],
+          "median_ms": 32
+        }
+      },
+      "doctor": {
+        "rw_wait_panel": {
+          "runs_ms": [
+            24,
+            21,
+            24
+          ],
+          "median_ms": 24
+        },
+        "rw_panel_login": {
+          "runs_ms": [
+            127,
+            101,
+            136
+          ],
+          "median_ms": 127
+        },
+        "rw_doctor": {
+          "runs_ms": [
+            719,
+            611,
+            734
+          ],
+          "median_ms": 719
+        }
+      },
+      "node_upgrade": {
+        "rw_verify_files": {
+          "runs_ms": [
+            566,
+            387,
+            427
+          ],
+          "median_ms": 427
+        },
+        "rw_resource_checks": {
+          "runs_ms": [
+            1204,
+            514,
+            590
+          ],
+          "median_ms": 590
+        },
+        "rw_backup": {
+          "runs_ms": [
+            2935,
+            1608,
+            1466
+          ],
+          "median_ms": 1608
+        },
+        "rw_backup_open": {
+          "runs_ms": [
+            505,
+            228,
+            249
+          ],
+          "median_ms": 249
+        },
+        "rw_track_files": {
+          "runs_ms": [
+            87,
+            53,
+            58
+          ],
+          "median_ms": 58
+        },
+        "rw_wait_panel": {
+          "runs_ms": [
+            44,
+            20,
+            23
+          ],
+          "median_ms": 23
+        },
+        "rw_panel_login": {
+          "runs_ms": [
+            231,
+            106,
+            193
+          ],
+          "median_ms": 193
+        },
+        "rw_doctor": {
+          "runs_ms": [
+            15808,
+            640,
+            758
+          ],
+          "median_ms": 758
+        }
+      },
+      "uninstall": {
+        "rw_verify_files": {
+          "runs_ms": [
+            303,
+            238,
+            252
+          ],
+          "median_ms": 252
+        }
+      }
+    }
+  },
+  "resources": {
+    "baseline": {
+      "1": {
+        "largest_individual_container_memory_peak_bytes": 536870912,
+        "temporary_directory_end_of_operation_max_bytes": 956466,
+        "driver_process_max_rss_kib": 45184
+      },
+      "2": {
+        "largest_individual_container_memory_peak_bytes": 504614912,
+        "temporary_directory_end_of_operation_max_bytes": 956092,
+        "driver_process_max_rss_kib": 45696
+      },
+      "3": {
+        "largest_individual_container_memory_peak_bytes": 508649472,
+        "temporary_directory_end_of_operation_max_bytes": 955886,
+        "driver_process_max_rss_kib": 45696
+      }
+    },
+    "optimized": {
+      "1": {
+        "largest_individual_container_memory_peak_bytes": 536875008,
+        "temporary_directory_end_of_operation_max_bytes": 3099893,
+        "driver_process_max_rss_kib": 45312
+      },
+      "2": {
+        "largest_individual_container_memory_peak_bytes": 505376768,
+        "temporary_directory_end_of_operation_max_bytes": 960634,
+        "driver_process_max_rss_kib": 45440
+      },
+      "3": {
+        "largest_individual_container_memory_peak_bytes": 499195904,
+        "temporary_directory_end_of_operation_max_bytes": 961163,
+        "driver_process_max_rss_kib": 45056
+      }
+    }
+  },
+  "cover_https_sampling": {
+    "baseline": {
+      "install": [
+        {
+          "run": 1,
+          "samples": 253,
+          "failed_samples": 213,
+          "longest_observed_failure_window_ms": 56938
+        },
+        {
+          "run": 2,
+          "samples": 248,
+          "failed_samples": 203,
+          "longest_observed_failure_window_ms": 53672
+        },
+        {
+          "run": 3,
+          "samples": 221,
+          "failed_samples": 183,
+          "longest_observed_failure_window_ms": 48019
+        }
+      ],
+      "repeat_apply": [
+        {
+          "run": 1,
+          "samples": 48,
+          "failed_samples": 0,
+          "longest_observed_failure_window_ms": 0
+        },
+        {
+          "run": 2,
+          "samples": 47,
+          "failed_samples": 0,
+          "longest_observed_failure_window_ms": 0
+        },
+        {
+          "run": 3,
+          "samples": 45,
+          "failed_samples": 0,
+          "longest_observed_failure_window_ms": 0
+        }
+      ],
+      "doctor": [
+        {
+          "run": 1,
+          "samples": 9,
+          "failed_samples": 0,
+          "longest_observed_failure_window_ms": 0
+        },
+        {
+          "run": 2,
+          "samples": 8,
+          "failed_samples": 0,
+          "longest_observed_failure_window_ms": 0
+        },
+        {
+          "run": 3,
+          "samples": 9,
+          "failed_samples": 0,
+          "longest_observed_failure_window_ms": 0
+        }
+      ],
+      "node_upgrade": [
+        {
+          "run": 1,
+          "samples": 121,
+          "failed_samples": 55,
+          "longest_observed_failure_window_ms": 14528
+        },
+        {
+          "run": 2,
+          "samples": 120,
+          "failed_samples": 55,
+          "longest_observed_failure_window_ms": 14453
+        },
+        {
+          "run": 3,
+          "samples": 77,
+          "failed_samples": 31,
+          "longest_observed_failure_window_ms": 7546
+        }
+      ],
+      "uninstall": [
+        {
+          "run": 1,
+          "samples": 34,
+          "failed_samples": 26,
+          "longest_observed_failure_window_ms": 6858
+        },
+        {
+          "run": 2,
+          "samples": 36,
+          "failed_samples": 29,
+          "longest_observed_failure_window_ms": 7584
+        },
+        {
+          "run": 3,
+          "samples": 38,
+          "failed_samples": 35,
+          "longest_observed_failure_window_ms": 7727
+        }
+      ]
+    },
+    "optimized": {
+      "install": [
+        {
+          "run": 1,
+          "samples": 227,
+          "failed_samples": 189,
+          "longest_observed_failure_window_ms": 49929
+        },
+        {
+          "run": 2,
+          "samples": 189,
+          "failed_samples": 150,
+          "longest_observed_failure_window_ms": 39312
+        },
+        {
+          "run": 3,
+          "samples": 231,
+          "failed_samples": 191,
+          "longest_observed_failure_window_ms": 50387
+        }
+      ],
+      "repeat_apply": [
+        {
+          "run": 1,
+          "samples": 29,
+          "failed_samples": 0,
+          "longest_observed_failure_window_ms": 0
+        },
+        {
+          "run": 2,
+          "samples": 25,
+          "failed_samples": 0,
+          "longest_observed_failure_window_ms": 0
+        },
+        {
+          "run": 3,
+          "samples": 31,
+          "failed_samples": 0,
+          "longest_observed_failure_window_ms": 0
+        }
+      ],
+      "doctor": [
+        {
+          "run": 1,
+          "samples": 3,
+          "failed_samples": 0,
+          "longest_observed_failure_window_ms": 0
+        },
+        {
+          "run": 2,
+          "samples": 3,
+          "failed_samples": 0,
+          "longest_observed_failure_window_ms": 0
+        },
+        {
+          "run": 3,
+          "samples": 3,
+          "failed_samples": 0,
+          "longest_observed_failure_window_ms": 0
+        }
+      ],
+      "node_upgrade": [
+        {
+          "run": 1,
+          "samples": 29,
+          "failed_samples": 19,
+          "longest_observed_failure_window_ms": 4758
+        },
+        {
+          "run": 2,
+          "samples": 29,
+          "failed_samples": 19,
+          "longest_observed_failure_window_ms": 4709
+        },
+        {
+          "run": 3,
+          "samples": 29,
+          "failed_samples": 19,
+          "longest_observed_failure_window_ms": 4727
+        }
+      ],
+      "uninstall": [
+        {
+          "run": 1,
+          "samples": 20,
+          "failed_samples": 16,
+          "longest_observed_failure_window_ms": 4225
+        },
+        {
+          "run": 2,
+          "samples": 19,
+          "failed_samples": 19,
+          "longest_observed_failure_window_ms": 4706
+        },
+        {
+          "run": 3,
+          "samples": 19,
+          "failed_samples": 17,
+          "longest_observed_failure_window_ms": 3928
+        }
+      ]
+    }
+  },
+  "cold_cache": {
+    "times": [
+      {
+        "case": "empty-cache",
+        "milliseconds": 74274
+      },
+      {
+        "case": "warm-missing",
+        "milliseconds": 334
+      },
+      {
+        "case": "warm-always",
+        "milliseconds": 1436
+      },
+      {
+        "case": "changed-missing-digest",
+        "milliseconds": 90436
+      }
+    ],
+    "temporary_daemon_data_bytes": 2279877878,
+    "isolated_daemon_removed": true
+  },
+  "file_operations": {
+    "runs": 5,
+    "managed_files": 15,
+    "track_median_ms": {
+      "baseline": 188,
+      "optimized": 43
+    },
+    "verify_median_ms": {
+      "baseline": 163,
+      "optimized": 100
+    }
+  },
+  "parse_help": {
+    "runs": 5,
+    "baseline_uninstall_median_ms": 17,
+    "optimized_uninstall_median_ms": 9,
+    "optimized_rwctl_median_ms": 14
+  },
+  "limitations": [
+    "Fresh-install ranges overlap; three pairs are descriptive, not a speed guarantee.",
+    "Stage timings include nested calls; adding them double-counts work.",
+    "Command-name wrappers count shell-mediated calls only; timeout subprocesses and service traffic are excluded.",
+    "Container memory.peak values are individual lifetime peaks, not simultaneous total RAM or proof of no OOM.",
+    "Temporary disk size sampled at operation end, not continuous peak.",
+    "Cover probes sample roughly every 250 ms with a 400 ms timeout; observed intervals are approximate, and do not measure every panel/subscription endpoint.",
+    "APT and Docker were already installed; package mirrors and a clean host bootstrap are not timed here.",
+    "No production load test or recurring observation."
+  ]
+}

@@ -53,7 +53,7 @@ rw_doctor() {
         [[ $state == healthy || $state == none ]] || rw_die "Healthcheck $service: $state."
     done < "$RW_TMP/doctor-states"
     if [[ $RW_ROLE != node ]]; then
-        rw_wait_panel
+        rw_wait_panel 120
         rw_tokens_status > "$RW_TMP/doctor-tokens.jsonl" || rw_die 'Panel tokens need recovery: run rwctl tokens rotate.'
         rw_mfa_status > "$RW_TMP/doctor-mfa.json"
         while IFS= read -r node_uuid; do
@@ -177,7 +177,7 @@ rw_node_attach() {
     local host=${RW_SSH:-} config=${RW_NODE_CONFIG:-} env remote
     [[ $RW_ROLE != node && $host =~ ^[A-Za-z0-9][A-Za-z0-9_.@:-]*$ && -f $config ]] || rw_die 'node attach requires --ssh USER@HOST and --node-config FILE on the panel server.'
     rw_owned; rw_verify_files; rw_ssh_idle; rw_lock
-    rw_wait_panel; rw_panel_login
+    rw_wait_panel 120; rw_panel_login
     jq -ef "$RW_TMP/config.jq" "$config" > "$RW_TMP/node-config.json"
     [[ $(jq -r '.role' "$RW_TMP/node-config.json") == node ]] || rw_die 'A node-role configuration is required.'
     env=$(jq -r '.environment_id' "$RW_TMP/node-config.json"); remote=/opt/pdm-remnawave/$env

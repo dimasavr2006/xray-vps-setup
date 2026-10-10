@@ -293,7 +293,7 @@ rw_apply() {
     if [[ $RW_ROLE != node ]]; then
         rw_info 'Starting PostgreSQL, Valkey and Remnawave.'
         rw_compose up -d --wait --wait-timeout 180 rw_db rw_valkey rw_panel
-        rw_wait_panel; rw_panel_login; rw_panel_tokens
+        rw_wait_panel 120; rw_panel_login; rw_panel_tokens
     fi
     if [[ $RW_ROLE == panel-node ]]; then
         rw_register_node "$RW_CFG" "$RW_OUT/private/connection.json" "$RW_PANEL_ADDRESS"

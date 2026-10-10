@@ -136,7 +136,7 @@ rw_restore_data() {
     fi
 }
 rw_start_existing() {
-    if [[ $RW_ROLE != node ]]; then rw_compose up -d --wait --wait-timeout 180 rw_db rw_valkey rw_panel || rw_die 'The panel failed to start.'; rw_wait_panel; rw_panel_login; fi
+    if [[ $RW_ROLE != node ]]; then rw_compose up -d --wait --wait-timeout 180 rw_db rw_valkey rw_panel || rw_die 'The panel failed to start.'; rw_wait_panel 120; rw_panel_login; fi
     rw_compose --profile public up -d rw_caddy || rw_die 'Caddy failed to start.'
     if [[ $RW_ROLE != node ]]; then rw_compose --profile public up -d rw_subscription || rw_die 'The subscription page failed to start.'; fi
     if rw_stats_enabled; then rw_compose --profile public up -d --wait --wait-timeout 90 rw_stats || rw_die 'The statistics API failed to start.'; fi

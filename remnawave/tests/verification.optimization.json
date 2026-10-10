@@ -1,105 +1,70 @@
 {
   "schema_version": 1,
-  "date": "2026-10-09",
-  "status": "stopped at explicit owner request; local checkpoint, final acceptance pending",
+  "date": "2026-10-10",
+  "status": "acceptance passed; publication/raw verification and final cleanup pending",
   "baseline_code_commit": "def8ba3b28386b4ccaf17c99389d961224492373",
   "baseline_published_head": "93f021e",
   "published": false,
-  "fi_modified": false,
-  "deterministic_build_canonical_and_public_mirror": "first candidate passed; latest generated entrypoints saved, final check pending",
-  "shellcheck_warning_level": "pass for first candidate; follow-up deadline changes require rerun",
-  "release_audit": "pass; 61 files, English runtime/docs, local links and private-key/token patterns",
-  "cleanup": {
-    "owned_containers_volumes_networks_removed": false,
-    "synthetic_backups_removed": false,
-    "wsl_stopped": true,
-    "base_system_and_image_cache_retained": true
-  },
+  "fi_modified": "CLI only; runtime not redeployed",
+  "deterministic_build_canonical_and_public_mirror": "pass",
+  "shellcheck_warning_level": "pass",
+  "release_audit": "pass; 66 files, English runtime/docs, valid local links, private-key/token patterns",
   "bash_checks": {
     "existing": 103,
     "optimization": 12,
-    "total": 115
+    "removal": 8,
+    "deadlines": 6,
+    "total": 129
   },
-  "measurements": {
-    "environment": "Debian 13 amd64 WSL; native Docker; cached pinned images; internal TLS; reserved DNS fixtures; security disabled in lifecycle timing fixture",
-    "lifecycle_runs_per_variant": 1,
-    "timings_ms": {
-      "install": {
-        "before": 91154,
-        "after": 57412
-      },
-      "repeat_apply": {
-        "before": 14271,
-        "after": 6731
-      },
-      "doctor": {
-        "before": 2437,
-        "after": 673
-      },
-      "node_upgrade": {
-        "before": 31978,
-        "after": 7670
-      },
-      "uninstall": {
-        "before": 9309,
-        "after": 4874
-      },
-      "subscription_upgrade": {
-        "after": 9290
-      },
-      "restore": {
-        "after": 55841
-      }
-    },
-    "file_operations": {
-      "runs": 5,
-      "managed_files": 15,
-      "manifest_median_ms": {
-        "before": 188,
-        "after": 43
-      },
-      "integrity_median_ms": {
-        "before": 163,
-        "after": 100
-      }
-    }
-  },
+  "measurement_evidence": "measurements.optimization.json",
   "passed": [
-    "fresh combined deployment and Confluence HTTPS",
-    "repeat apply preserves secrets and API UUIDs",
-    "doctor supports containers both with and without a healthcheck",
-    "node and subscription upgrades preserve panel start time",
-    "failed node upgrade rollback retains a concurrent database write",
-    "backup/purge/restore retains secrets and the test database row",
-    "reduced standalone uninstall removes the restored live fixture",
-    "actual wget/process-substitution preview and prepared uninstall",
-    "batched hashes and parent traversal retain integrity checks",
-    "DNS failures, Docker inventory failures and foreign identities block operations",
-    "fresh Docker installation retains RAM recheck",
-    "APT refresh caching invalidates for a new repository and rejects failure"
+    "native Debian 13 Docker panel/node/panel-node role matrix, including separate native node attachment",
+    "old prepared package refreshed and repeat preserves keys/API UUIDs",
+    "FI-style parallel repeat preserves legacy HTTPS/start time; uninstall restores exact original proxy file",
+    "mixed containers with/without healthchecks",
+    "real armed UFW uninstall restores prior policy/SSH, stops guard, retains foreign rules and root keys; armed SSH blocks deletion",
+    "foreign/changed files and container/network/volume inventory failures block operations; post-confirmation inventory refreshed",
+    "three alternating cached-image lifecycle pairs; timings, stage/call counters, sampled cover availability and resource metrics",
+    "isolated empty/warm cache and absent changed digest pull",
+    "node/subscription upgrade preserves panel start time; failed component rollback preserves concurrent database row",
+    "live PostgreSQL 18.3 to 18.4 upgrade and full rollback preserves snapshot row/removes post-snapshot table",
+    "old pre-optimization CI MFA/stats archive trusted restore preserves secrets/API UUIDs/TOTP; fresh MFA/wrong-code/separate API authentication",
+    "real stalled HTTP enforces shared panel/node deadlines; failed pull retains keys and starts no application container",
+    "real SIGKILL before rename/after rename/after manifest and SIGTERM before rename recover journal/integrity",
+    "real API bootstrap SIGKILL after admin/token/profile responses resumes without duplicate owned API identities",
+    "actual local wget/process-substitution preview and scoped prepared uninstall",
+    "FI separate optimized CLI promotion preserves all 13 container start times/restart counts, root keys, runtime config, UFW and personal TOTP; doctor/stats/legacy+cover trusted HTTPS pass",
+    "FI pre/post private backups checksum verified offhost"
   ],
+  "fi_promotion": {
+    "date_utc": "2026-10-10T18:57:46Z",
+    "pre_backup": "/var/backups/pdm-remnawave/fi-test-pre-optimization-20261010T185733Z.tgz",
+    "post_backup": "/var/backups/pdm-remnawave/fi-test-optimization-20261010T185733Z.tgz",
+    "containers_checked": 13,
+    "all_container_start_times_and_restart_counts_preserved": true,
+    "root_keys_and_runtime_config_preserved": true,
+    "ufw_preserved": true,
+    "owner_totp_preserved": true,
+    "doctor": true,
+    "stats": true,
+    "legacy_and_cover_trusted_https": true
+  },
+  "cleanup": {
+    "owned_containers_volumes_networks_removed": "final inventory pending",
+    "synthetic_backups_removed": false,
+    "wsl_stopped": false,
+    "base_system_and_image_cache_retained": true
+  },
   "pending": [
-    "reduced uninstall with armed UFW in the native SSH namespace fixture",
-    "repeat measurements for statistically stronger lifecycle comparisons",
-    "cold image cache and actually changed image digest comparisons",
-    "complete role matrix after optimization",
-    "publish candidate and verify raw GitHub entrypoints",
-    "separate optional FI CLI promotion"
+    "public mirror/release audit and publication",
+    "actual published raw byte comparison/process substitution",
+    "owned CI backup/fixture cleanup and stop own WSL"
   ],
   "limitations": [
-    "One full comparison per variant is indicative, not a guaranteed VPS installation time.",
-    "Current pinned images were recreated; newer upstream versions were not certified.",
-    "Provider public DNS/ACME and external global IPv6 remain outside this comparison.",
-    "No periodic observation or production load test was started."
-  ],
-  "followup": {
-    "removal_checks_passed": 8,
-    "native_armed_ufw_uninstall": "pass; policy and SSH restored, guard stopped, foreign rules/root key preserved",
-    "inactive_ufw_owned_rule_removal": "implemented and tested",
-    "post_confirmation_network_volume_inventory": "implemented and tested",
-    "api_pull_deadlines": "implemented; targeted failure tests pending",
-    "comparison": "baseline run 1 finished; optimized run 1 install 69396 ms finished; repeat apply interrupted by owner",
-    "fixture": "/opt/pdm-remnawave/ci-perf preserved in stopped WSL",
-    "automatic_resume": false
-  }
+    "Fresh-install timing ranges overlap; three alternating pairs are descriptive, not a speed guarantee.",
+    "APT/Docker preinstalled and reserved DNS/internal TLS in timing fixtures; clean provider VPS public DNS/ACME and external global IPv6 remain open.",
+    "Current production pins unchanged; only previously reviewed PostgreSQL 18.3/18.4 pair tested, no newer upstream image certification.",
+    "Memory peaks are individual lifetime peaks, not simultaneous total RAM or production-load evidence.",
+    "Full passive 48-hour observation was stopped by owner; no recurring observation or automatic updates created."
+  ]
 }

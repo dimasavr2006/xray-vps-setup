@@ -163,7 +163,7 @@ rw_memory_limits() {
         else {rw_db:512,rw_valkey:128,rw_panel:768,rw_subscription:128,rw_caddy:128,rw_node:256} end' "$RW_CFG"
 }
 rw_compose() { docker compose --project-name "$RW_PROJECT" -f "$RW_OUT/compose.json" "$@"; }
-rw_pull() { timeout --foreground 900 docker compose --project-name "$RW_PROJECT" -f "$RW_OUT/compose.json" --profile public --profile node pull --policy missing "$@"; }
+rw_pull() { timeout --foreground 900 docker compose --project-name "$RW_PROJECT" -f "$RW_OUT/compose.json" --profile public --profile node pull --policy missing; }
 rw_manifest_set() { local filter=$1; shift; jq "$@" "$filter" "$RW_OUT/manifest.json" | rw_atomic "$RW_OUT/manifest.json"; }
 rw_manifest() {
     local status=$1

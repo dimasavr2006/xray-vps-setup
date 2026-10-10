@@ -1141,7 +1141,7 @@ rw_memory_limits() {
         else {rw_db:512,rw_valkey:128,rw_panel:768,rw_subscription:128,rw_caddy:128,rw_node:256} end' "$RW_CFG"
 }
 rw_compose() { docker compose --project-name "$RW_PROJECT" -f "$RW_OUT/compose.json" "$@"; }
-rw_pull() { timeout --foreground 900 docker compose --project-name "$RW_PROJECT" -f "$RW_OUT/compose.json" --profile public --profile node pull --policy missing "$@"; }
+rw_pull() { timeout --foreground 900 docker compose --project-name "$RW_PROJECT" -f "$RW_OUT/compose.json" --profile public --profile node pull --policy missing; }
 rw_manifest_set() { local filter=$1; shift; jq "$@" "$filter" "$RW_OUT/manifest.json" | rw_atomic "$RW_OUT/manifest.json"; }
 rw_manifest() {
     local status=$1
@@ -2176,7 +2176,7 @@ rw_apply() {
     if [[ $RW_ROLE != node ]]; then
         rw_info 'Starting PostgreSQL, Valkey and Remnawave.'
         rw_compose up -d --wait --wait-timeout 180 rw_db rw_valkey rw_panel
-        rw_wait_panel; rw_panel_login; rw_panel_tokens
+        rw_wait_panel 120; rw_panel_login; rw_panel_tokens
     fi
     if [[ $RW_ROLE == panel-node ]]; then
         rw_register_node "$RW_CFG" "$RW_OUT/private/connection.json" "$RW_PANEL_ADDRESS"
@@ -2399,7 +2399,7 @@ rw_doctor() {
         [[ $state == healthy || $state == none ]] || rw_die "Healthcheck $service: $state."
     done < "$RW_TMP/doctor-states"
     if [[ $RW_ROLE != node ]]; then
-        rw_wait_panel
+        rw_wait_panel 120
         rw_tokens_status > "$RW_TMP/doctor-tokens.jsonl" || rw_die 'Panel tokens need recovery: run rwctl tokens rotate.'
         rw_mfa_status > "$RW_TMP/doctor-mfa.json"
         while IFS= read -r node_uuid; do
@@ -2523,7 +2523,7 @@ rw_node_attach() {
     local host=${RW_SSH:-} config=${RW_NODE_CONFIG:-} env remote
     [[ $RW_ROLE != node && $host =~ ^[A-Za-z0-9][A-Za-z0-9_.@:-]*$ && -f $config ]] || rw_die 'node attach requires --ssh USER@HOST and --node-config FILE on the panel server.'
     rw_owned; rw_verify_files; rw_ssh_idle; rw_lock
-    rw_wait_panel; rw_panel_login
+    rw_wait_panel 120; rw_panel_login
     jq -ef "$RW_TMP/config.jq" "$config" > "$RW_TMP/node-config.json"
     [[ $(jq -r '.role' "$RW_TMP/node-config.json") == node ]] || rw_die 'A node-role configuration is required.'
     env=$(jq -r '.environment_id' "$RW_TMP/node-config.json"); remote=/opt/pdm-remnawave/$env
@@ -2692,7 +2692,7 @@ rw_restore_data() {
     fi
 }
 rw_start_existing() {
-    if [[ $RW_ROLE != node ]]; then rw_compose up -d --wait --wait-timeout 180 rw_db rw_valkey rw_panel || rw_die 'The panel failed to start.'; rw_wait_panel; rw_panel_login; fi
+    if [[ $RW_ROLE != node ]]; then rw_compose up -d --wait --wait-timeout 180 rw_db rw_valkey rw_panel || rw_die 'The panel failed to start.'; rw_wait_panel 120; rw_panel_login; fi
     rw_compose --profile public up -d rw_caddy || rw_die 'Caddy failed to start.'
     if [[ $RW_ROLE != node ]]; then rw_compose --profile public up -d rw_subscription || rw_die 'The subscription page failed to start.'; fi
     if rw_stats_enabled; then rw_compose --profile public up -d --wait --wait-timeout 90 rw_stats || rw_die 'The statistics API failed to start.'; fi
@@ -3170,7 +3170,7 @@ rw_tls_forward_challenge() {
 }
 rw_tls_get_certificate() {
     local domain=$1 output=$2 attempt
-    for attempt in {1..90}; do
+    for ((attempt=0; attempt<90; attempt++)); do
         { openssl s_client -connect "127.0.0.1:$RW_TLS_HTTPS" -servername "$domain" </dev/null 2>/dev/null || true; } | openssl x509 -outform PEM > "$output" 2>/dev/null || true
         if [[ -s $output ]] && openssl x509 -in "$output" -noout -issuer | grep -qi staging; then
             openssl x509 -in "$output" -noout -checkhost "$domain" >/dev/null || rw_die 'The staging certificate does not match the SNI.'

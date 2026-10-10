@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "date": "2026-10-09",
+  "date": "2026-10-10",
   "host": "FI",
   "os": "Debian 13 amd64",
   "environment_id": "fi-test",
@@ -193,7 +193,21 @@
       }
     ],
     "legacy_and_new_https_after_ufw": "pass",
-    "ufw_offhost_backup_checksum": "pass: fi-test-ufw-20261009T113416Z.tgz"
+    "ufw_offhost_backup_checksum": "pass: fi-test-ufw-20261009T113416Z.tgz",
+    "optimized_cli_promotion_20261010": {
+      "date_utc": "2026-10-10T18:57:46Z",
+      "pre_backup": "/var/backups/pdm-remnawave/fi-test-pre-optimization-20261010T185733Z.tgz",
+      "post_backup": "/var/backups/pdm-remnawave/fi-test-optimization-20261010T185733Z.tgz",
+      "containers_checked": 13,
+      "all_container_start_times_and_restart_counts_preserved": true,
+      "root_keys_and_runtime_config_preserved": true,
+      "ufw_preserved": true,
+      "owner_totp_preserved": true,
+      "doctor": true,
+      "stats": true,
+      "legacy_and_cover_trusted_https": true
+    },
+    "optimization_pre_post_backups_offhost_checksum": true
   },
   "resources": {
     "disk_free_bytes": 5132484608,

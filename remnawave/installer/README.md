@@ -64,12 +64,14 @@ bash tests/bash/summary-unit.sh
 bash tests/bash/security-unit.sh
 bash tests/bash/optimization-unit.sh
 bash tests/bash/removal-unit.sh
+bash tests/bash/deadline-unit.sh
 bash tests/bash/http-entrypoints.sh
 node tests/stats-hook.cjs
 ```
 
-The first nine suites contain 115 checks; removal-unit adds eight checks. The
-latest follow-up changes await final verification. HTTP tests additionally exercise wget
+The eleven unit suites contain 129 checks. deadline-live.sh tests actual stalled
+HTTP connections and pull failure; signal-live.sh tests actual interrupted writes.
+HTTP tests additionally exercise wget
 and process substitution without a source checkout. `mfa-live.cjs` and
 `stats-live.py` are development test clients, not VPS installer requirements.
 Run live tests only against a disposable, explicitly selected installation.

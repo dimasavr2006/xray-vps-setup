@@ -267,10 +267,16 @@ Additional commands include `preflight`, `tls-test`, `ssh prepare` and
 
 ## Verification
 
-The first optimization candidate passed 115 Bash checks and ShellCheck. Eight
-additional removal checks and native armed-UFW uninstall passed in the follow-up.
-The current working candidate is paused before final verification and publication;
-its API/pull deadline changes still need targeted failure tests. Host-security tests cover root key
+The optimized release passed 129 Bash checks, deterministic builds and ShellCheck.
+Real tests cover all three roles, old prepared packages, parallel legacy Caddy,
+armed-UFW uninstall, API deadlines, failed pulls, interruption/recovery and old
+MFA/stats backup restore. Three alternating comparisons measured repeat apply
+12.377 → 7.645 seconds, doctor 2.145 → 0.725 seconds and node redeployment
+32.181 → 7.994 seconds. These cached-image/internal-TLS measurements are not
+guaranteed VPS timings; fresh-install ranges overlap. See the
+[optimization audit](installer/OPTIMIZATION.md) and
+[optimization verification](tests/verification.optimization.json).
+Host-security tests cover root key
 validation/preservation, public port discovery, legacy config compatibility,
 active-policy restrictions and read-only preview. Native Debian UFW namespace
 tests preserved TCP/UDP/IPv6 services, blocked unapproved listeners, confirmed

@@ -44,7 +44,7 @@ rw_tls_forward_challenge() {
 }
 rw_tls_get_certificate() {
     local domain=$1 output=$2 attempt
-    for attempt in {1..90}; do
+    for ((attempt=0; attempt<90; attempt++)); do
         { openssl s_client -connect "127.0.0.1:$RW_TLS_HTTPS" -servername "$domain" </dev/null 2>/dev/null || true; } | openssl x509 -outform PEM > "$output" 2>/dev/null || true
         if [[ -s $output ]] && openssl x509 -in "$output" -noout -issuer | grep -qi staging; then
             openssl x509 -in "$output" -noout -checkhost "$domain" >/dev/null || rw_die 'The staging certificate does not match the SNI.'
